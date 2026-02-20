@@ -1,0 +1,21 @@
+[2026-02-19 09:00:05] FATAL ERROR (main)
+APP=BazaS2 v=0.2-v1
+PID=2692 THREAD=MainThread
+DB_FILE=D:\DEV\AppToc\V1Baza\data\db\bazas2.sqlite
+
+EXCEPTION:
+Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1320, in start_ui
+    win = MainWindow(logger)
+  File "D:\DEV\AppToc\V1Baza\app.py", line 959, in __init__
+    self._rebuild_ui_by_profile()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1161, in _rebuild_ui_by_profile
+    page_assets = AssetsPage(self.logger)
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 1190, in __init__
+    self.preview.set_open_handler(self.open_selected_detail)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'AssetsPage' object has no attribute 'open_selected_detail'

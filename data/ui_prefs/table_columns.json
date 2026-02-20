@@ -1,0 +1,69 @@
+{
+  "assignments_table_v1": {
+    "order": [
+      "time",
+      "uid",
+      "name",
+      "action",
+      "from",
+      "to",
+      "loc",
+      "note"
+    ],
+    "hidden": {
+      "time": false,
+      "uid": false,
+      "name": false,
+      "action": false,
+      "from": false,
+      "to": false,
+      "loc": false,
+      "note": false
+    },
+    "widths": {
+      "time": 160,
+      "uid": 160,
+      "name": 220,
+      "action": 120,
+      "from": 160,
+      "to": 160,
+      "loc": 160,
+      "note": 240
+    }
+  },
+  "metrology_table_v1": {
+    "order": [
+      "status",
+      "met_uid",
+      "asset_uid",
+      "calib_type",
+      "calib_date",
+      "valid_until",
+      "provider_name",
+      "cert_no",
+      "updated_at"
+    ],
+    "hidden": {
+      "status": false,
+      "met_uid": false,
+      "asset_uid": false,
+      "calib_type": false,
+      "calib_date": false,
+      "valid_until": false,
+      "provider_name": false,
+      "cert_no": false,
+      "updated_at": false
+    },
+    "widths": {
+      "status": 110,
+      "met_uid": 150,
+      "asset_uid": 170,
+      "calib_type": 140,
+      "calib_date": 120,
+      "valid_until": 120,
+      "provider_name": 200,
+      "cert_no": 160,
+      "updated_at": 150
+    }
+  }
+}

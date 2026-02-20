@@ -1,0 +1,23 @@
+{
+    "colors": true,
+    "show_hidden": false,
+    "max_file_width": 50,
+    "sort_by": "path",
+    "sort_reverse": false,
+    "ignore_patterns": [
+        "venv",
+        ".venv",
+        "env",
+        ".env",
+        ".git",
+        "__pycache__",
+        ".idea",
+        ".vscode",
+        "node_modules",
+        "dist",
+        "build"
+    ],
+    "export_format": "table",
+    "cache_timeout": 3600,
+    "show_progress_bar": true
+}

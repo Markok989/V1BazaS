@@ -1,0 +1,60 @@
+{
+  "tables": {
+    "assets_table_v1": [
+      {
+        "key": "asset_uid",
+        "label": "Asset UID",
+        "visible": true,
+        "width": 160
+      },
+      {
+        "key": "location",
+        "label": "Lokacija",
+        "visible": true,
+        "width": 160
+      },
+      {
+        "key": "toc_number",
+        "label": "TOC",
+        "visible": true,
+        "width": 120
+      },
+      {
+        "key": "name",
+        "label": "Naziv",
+        "visible": true,
+        "width": 260
+      },
+      {
+        "key": "category",
+        "label": "Kategorija",
+        "visible": true,
+        "width": 140
+      },
+      {
+        "key": "current_holder",
+        "label": "Zaduženo kod",
+        "visible": true,
+        "width": 160
+      },
+      {
+        "key": "status",
+        "label": "Status",
+        "visible": true,
+        "width": 120
+      },
+      {
+        "key": "serial_number",
+        "label": "Serijski",
+        "visible": true,
+        "width": 140
+      },
+      {
+        "key": "updated_at",
+        "label": "Ažurirano",
+        "visible": true,
+        "width": 150
+      }
+    ]
+  }
+}

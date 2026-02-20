@@ -1,0 +1,39 @@
+{
+  "colors": true,
+  "unicode_chars": true,
+  "max_file_width": 45,
+  "show_hidden": false,
+  "show_progress": true,
+  "show_sparklines": true,
+  "sort_by": "path",
+  "sort_reverse": false,
+  "ignore_patterns": [
+    "venv",
+    ".venv",
+    "env",
+    ".env",
+    ".git",
+    "__pycache__",
+    ".idea",
+    ".vscode",
+    "node_modules",
+    "dist",
+    "build",
+    "*.pyc",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".coverage"
+  ],
+  "cache_timeout": 3600,
+  "use_cache": true,
+  "large_file_threshold": 500,
+  "complexity_thresholds": {
+    "low": 20,
+    "medium": 50,
+    "high": 100
+  },
+  "export_decimal_places": 2,
+  "export_include_complexity": true,
+  "live_preview_debounce": 1.0,
+  "live_preview_recursive": true
+}

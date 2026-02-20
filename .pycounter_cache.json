@@ -1,0 +1,668 @@
+{
+  "version": "2.0",
+  "timestamp": 1771579746.1980243,
+  "files": {
+    "app.py": {
+      "lines": 1427,
+      "size": 52934,
+      "modified": 1771413685.6732996,
+      "hash": "2ac26958b5333db2315dbc3b7a6c3f55",
+      "complexity": 0
+    },
+    "linije.py": {
+      "lines": 116,
+      "size": 4617,
+      "modified": 1770658388.5760703,
+      "hash": "8411993f3687b6dde288f417011faeb3",
+      "complexity": 0
+    },
+    "linijetab.py": {
+      "lines": 230,
+      "size": 9585,
+      "modified": 1770658560.3687136,
+      "hash": "caa7a90b2d864ef7e4c12b993a8c0278",
+      "complexity": 0
+    },
+    "linijetab2.py": {
+      "lines": 61,
+      "size": 1824,
+      "modified": 1770658735.364681,
+      "hash": "694c5bcf8666513293fea6adbf0f1d1e",
+      "complexity": 0
+    },
+    "linijetab3.py": {
+      "lines": 218,
+      "size": 7375,
+      "modified": 1770659087.2303648,
+      "hash": "73242f4ebf97b721334298138f26f4b9",
+      "complexity": 0
+    },
+    "linijetab4.py": {
+      "lines": 436,
+      "size": 16852,
+      "modified": 1770659313.3656106,
+      "hash": "0c3525221022470518b3f32ef8288d53",
+      "complexity": 0
+    },
+    "linijetab5.py": {
+      "lines": 443,
+      "size": 17107,
+      "modified": 1770659576.1128502,
+      "hash": "da00d4a613d0dfd1d80759d43735e4f2",
+      "complexity": 0
+    },
+    "linijetab6.py": {
+      "lines": 499,
+      "size": 20504,
+      "modified": 1770895305.218457,
+      "hash": "591f20b4b22f7cc02a99960bf7371f8f",
+      "complexity": 0
+    },
+    "linijetab7.py": {
+      "lines": 2341,
+      "size": 97168,
+      "modified": 1770897481.7677207,
+      "hash": "0153a2798b0d732e2d113ebab2896034",
+      "complexity": 0
+    },
+    "linijetab8.py": {
+      "lines": 1529,
+      "size": 69533,
+      "modified": 1770909128.878168,
+      "hash": "9e6347d3bce9538c47e014733b9f9747",
+      "complexity": 0
+    },
+    "linijetab9.py": {
+      "lines": 2465,
+      "size": 100850,
+      "modified": 1771459126.3724656,
+      "hash": "7af8d6bf0c483a2c54db75c70496623c",
+      "complexity": 0
+    },
+    "core\\asset_quality.py": {
+      "lines": 189,
+      "size": 5125,
+      "modified": 1770825118.328161,
+      "hash": "92f880c6a2e1f56c448eb400c385d952",
+      "complexity": 0
+    },
+    "core\\attachments_db.py": {
+      "lines": 155,
+      "size": 4995,
+      "modified": 1769970407.457041,
+      "hash": "838adeb9c0a0a41832d69204631a4145",
+      "complexity": 0
+    },
+    "core\\attachments_store.py": {
+      "lines": 88,
+      "size": 2499,
+      "modified": 1769970490.4811013,
+      "hash": "0039e148d377f6e9bf8ba5fe3d1a4bdb",
+      "complexity": 0
+    },
+    "core\\backup.py": {
+      "lines": 481,
+      "size": 14393,
+      "modified": 1769951321.784789,
+      "hash": "ac74d803c82d3071a1e8b5a663bccd3f",
+      "complexity": 0
+    },
+    "core\\config.py": {
+      "lines": 155,
+      "size": 4243,
+      "modified": 1770820185.3587162,
+      "hash": "41179ba36378ee493739e64b6ffd2338",
+      "complexity": 0
+    },
+    "core\\db.py": {
+      "lines": 1597,
+      "size": 51792,
+      "modified": 1770919440.7335162,
+      "hash": "18ded22bc01fbfda0463106ec6286d40",
+      "complexity": 0
+    },
+    "core\\logger.py": {
+      "lines": 222,
+      "size": 6915,
+      "modified": 1770821018.491333,
+      "hash": "3b74b97bea1b4644de9cde81fe2cb4cb",
+      "complexity": 0
+    },
+    "core\\log_bundle.py": {
+      "lines": 134,
+      "size": 4098,
+      "modified": 1770821055.3801174,
+      "hash": "a08b22f4e9bc11b83cb54422ec66e3b2",
+      "complexity": 0
+    },
+    "core\\paths.py": {
+      "lines": 97,
+      "size": 2785,
+      "modified": 1770460301.8670216,
+      "hash": "e8a807789c1f0aac71fb36232cfe9dce",
+      "complexity": 0
+    },
+    "core\\rbac.py": {
+      "lines": 624,
+      "size": 18590,
+      "modified": 1771460392.5481443,
+      "hash": "00d758d1ef8b5ae7a9fb3ffce2085df4",
+      "complexity": 0
+    },
+    "core\\selfcheck.py": {
+      "lines": 157,
+      "size": 4827,
+      "modified": 1769945795.8454592,
+      "hash": "e32b6a31c9e018c7f1b98db0bb8f3189",
+      "complexity": 0
+    },
+    "core\\session.py": {
+      "lines": 784,
+      "size": 23596,
+      "modified": 1771460191.9701266,
+      "hash": "6eb68babdc83f452ad9724e31e3b9468",
+      "complexity": 0
+    },
+    "core\\__init__.py": {
+      "lines": 0,
+      "size": 0,
+      "modified": 1769972878.9611692,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e",
+      "complexity": 0
+    },
+    "services\\assets_service.py": {
+      "lines": 1206,
+      "size": 38941,
+      "modified": 1771485269.0853353,
+      "hash": "561d181b33241d2dd2139210f578ad63",
+      "complexity": 0
+    },
+    "services\\assignments_service.py": {
+      "lines": 216,
+      "size": 6430,
+      "modified": 1770331572.942804,
+      "hash": "3650094230b81aa1aa0f7e5f973e890d",
+      "complexity": 0
+    },
+    "services\\attachments_service.py": {
+      "lines": 631,
+      "size": 21067,
+      "modified": 1770460551.5815268,
+      "hash": "4ef8e60a5ef21657dd687f5acd2687d1",
+      "complexity": 0
+    },
+    "services\\audit_service.py": {
+      "lines": 394,
+      "size": 12265,
+      "modified": 1770311143.3125055,
+      "hash": "868879e91fa55f301cd6af3cdb635890",
+      "complexity": 0
+    },
+    "services\\custom_fields_service.py": {
+      "lines": 511,
+      "size": 17092,
+      "modified": 1770135149.6156502,
+      "hash": "48dc838d5011baebcc07faf40f836d2d",
+      "complexity": 0
+    },
+    "services\\dashboard_service.py": {
+      "lines": 1193,
+      "size": 44047,
+      "modified": 1771448268.2883043,
+      "hash": "bf06b92e9e61144c1734299f38eb451f",
+      "complexity": 0
+    },
+    "services\\metrology_service.py": {
+      "lines": 1272,
+      "size": 40068,
+      "modified": 1771445076.5378277,
+      "hash": "ea69a3a979b92f67ad4e1d851a9494dd",
+      "complexity": 0
+    },
+    "services\\my_assets_service.py": {
+      "lines": 243,
+      "size": 7541,
+      "modified": 1770454266.7531943,
+      "hash": "6e6db1ff4bdaddc09322db17d558e29b",
+      "complexity": 0
+    },
+    "services\\ui_table_view_service.py": {
+      "lines": 201,
+      "size": 7310,
+      "modified": 1770135829.0701287,
+      "hash": "7eea9e638c022795cda8f15c797bbaf8",
+      "complexity": 0
+    },
+    "services\\users_service.py": {
+      "lines": 3078,
+      "size": 104938,
+      "modified": 1771458973.0683184,
+      "hash": "1d78bc7c9fae30f8ed30d1bc2543a7c5",
+      "complexity": 0
+    },
+    "services\\user_roles_service.py": {
+      "lines": 358,
+      "size": 11151,
+      "modified": 1770464755.4347737,
+      "hash": "32af1529f65b611cd7317a1f5b5180d8",
+      "complexity": 0
+    },
+    "services\\_rbac_guard.py": {
+      "lines": 106,
+      "size": 2862,
+      "modified": 1770330792.8526905,
+      "hash": "cc3f1d799989e992589493d70dadb464",
+      "complexity": 0
+    },
+    "services\\__init__.py": {
+      "lines": 1,
+      "size": 4,
+      "modified": 1769972895.8460517,
+      "hash": "0cf31b2c283ce3431794586df7b0996d",
+      "complexity": 0
+    },
+    "tests\\smoke_assets_page.py": {
+      "lines": 697,
+      "size": 23447,
+      "modified": 1770927473.4878829,
+      "hash": "fc16f0e10b7709f3f979b65b35e87cf6",
+      "complexity": 0
+    },
+    "tools\\full_smoke_test.py": {
+      "lines": 420,
+      "size": 12596,
+      "modified": 1770654219.6784017,
+      "hash": "d3dd0c5c076e227923d0eb949ca2114e",
+      "complexity": 0
+    },
+    "tools\\full_smoke_testv1.py": {
+      "lines": 374,
+      "size": 11989,
+      "modified": 1770655301.8089743,
+      "hash": "a84b8d9d02821edf3a6e92b342ca407b",
+      "complexity": 0
+    },
+    "tools\\full_smoke_testv2.py": {
+      "lines": 362,
+      "size": 11917,
+      "modified": 1770656617.804831,
+      "hash": "8111ce668d709a85793512113bcd7090",
+      "complexity": 0
+    },
+    "tools\\scenario_smoke_test.py": {
+      "lines": 438,
+      "size": 15708,
+      "modified": 1770657054.998203,
+      "hash": "7aa19b128f859d6dbbbd3a99d9dc46c5",
+      "complexity": 0
+    },
+    "tools\\scenario_smoke_testv1.py": {
+      "lines": 423,
+      "size": 14404,
+      "modified": 1770657364.643391,
+      "hash": "874c3855d11b67689e3e347f7e7817f6",
+      "complexity": 0
+    },
+    "tools\\scenario_smoke_testv2.py": {
+      "lines": 594,
+      "size": 22327,
+      "modified": 1770658230.4230554,
+      "hash": "e7f5a952aeb8b286e0ebf50420230776",
+      "complexity": 0
+    },
+    "tools\\scenario_smoke_testv3.py": {
+      "lines": 571,
+      "size": 20444,
+      "modified": 1770660297.4645445,
+      "hash": "469aa2a7f14792f7e173cd0aab94d9b5",
+      "complexity": 0
+    },
+    "tools\\scenario_smoke_testv4.py": {
+      "lines": 785,
+      "size": 29150,
+      "modified": 1770662603.1815445,
+      "hash": "60e980159a4a6f4a74cb3a19e59b3bfd",
+      "complexity": 0
+    },
+    "tools\\scenario_smoke_testv5.py": {
+      "lines": 178,
+      "size": 5258,
+      "modified": 1770663719.3111508,
+      "hash": "62c2210320a7e77fad1b881a344e7c8c",
+      "complexity": 0
+    },
+    "tools\\smoke_test.py": {
+      "lines": 513,
+      "size": 15959,
+      "modified": 1770653769.512813,
+      "hash": "ee4989c2886caf174f12cb62f58bdcd6",
+      "complexity": 0
+    },
+    "tools\\smoke_testv3.py": {
+      "lines": 154,
+      "size": 4269,
+      "modified": 1770659006.749526,
+      "hash": "0b03c91084fb363e43e2a1895309bfe9",
+      "complexity": 0
+    },
+    "ui\\assets_page.py": {
+      "lines": 1899,
+      "size": 66300,
+      "modified": 1771571504.1654809,
+      "hash": "41bd2af38bbb3be2d62fc5da023b6f52",
+      "complexity": 0
+    },
+    "ui\\asset_detail_dialog.py": {
+      "lines": 3092,
+      "size": 112372,
+      "modified": 1771460888.131888,
+      "hash": "a1ca1a1176b673cf8d1d8a461e08dd83",
+      "complexity": 0
+    },
+    "ui\\asset_edit_dialog.py": {
+      "lines": 326,
+      "size": 11474,
+      "modified": 1770899959.9735405,
+      "hash": "5eaa940004e96f1c2ddb58853fd80f2f",
+      "complexity": 0
+    },
+    "ui\\assignments_page.py": {
+      "lines": 816,
+      "size": 29808,
+      "modified": 1771457697.347953,
+      "hash": "deff2244939cb63c6af676fd4c830a03",
+      "complexity": 0
+    },
+    "ui\\audit_page.py": {
+      "lines": 493,
+      "size": 18796,
+      "modified": 1770293940.5009663,
+      "hash": "fc3a0f8af819a953451706e10b12bae9",
+      "complexity": 0
+    },
+    "ui\\columns_dialog.py": {
+      "lines": 335,
+      "size": 10942,
+      "modified": 1770149148.0962298,
+      "hash": "1c63e23c473ed3a78a1ef9fe17ba8514",
+      "complexity": 0
+    },
+    "ui\\column_manager_dialog.py": {
+      "lines": 228,
+      "size": 8336,
+      "modified": 1770286615.0230966,
+      "hash": "b2fc014ae765f8ff9c634cb058928002",
+      "complexity": 0
+    },
+    "ui\\custom_fields_page.py": {
+      "lines": 316,
+      "size": 11581,
+      "modified": 1770288093.3816056,
+      "hash": "6ee2c0105d0cec63c2e5312159acbf8a",
+      "complexity": 0
+    },
+    "ui\\dashboard_page.py": {
+      "lines": 909,
+      "size": 34609,
+      "modified": 1771450589.0981443,
+      "hash": "b3c89ae97619c8c9f04aa1335e59b728",
+      "complexity": 0
+    },
+    "ui\\login_dialog.py": {
+      "lines": 1521,
+      "size": 55458,
+      "modified": 1771413314.2714667,
+      "hash": "e741d3b795a13e5182a80dd83af39d82",
+      "complexity": 0
+    },
+    "ui\\metrology_dashboard_page.py": {
+      "lines": 1636,
+      "size": 55133,
+      "modified": 1771360019.422908,
+      "hash": "585a992dd2b17d1be71380f307b65811",
+      "complexity": 0
+    },
+    "ui\\metrology_page.py": {
+      "lines": 1707,
+      "size": 64449,
+      "modified": 1771404613.2976358,
+      "hash": "3da1f47ad305c06816aa2e88104c1303",
+      "complexity": 0
+    },
+    "ui\\my_assets_page.py": {
+      "lines": 873,
+      "size": 30044,
+      "modified": 1770662985.8080204,
+      "hash": "25a6ca9aa2fd7a9e8f13cf3e4335899c",
+      "complexity": 0
+    },
+    "ui\\new_asset_dialog.py": {
+      "lines": 431,
+      "size": 15193,
+      "modified": 1770629748.0952058,
+      "hash": "b0d2164b5fb14ae94e7ec1ec1e12d4cb",
+      "complexity": 0
+    },
+    "ui\\role_switch_dialog.py": {
+      "lines": 77,
+      "size": 2403,
+      "modified": 1770467547.9286554,
+      "hash": "bc0e432812de8908540d535212881a25",
+      "complexity": 0
+    },
+    "ui\\settings_page.py": {
+      "lines": 1298,
+      "size": 49521,
+      "modified": 1770937748.3011537,
+      "hash": "75c8c41693ca2299bae60c2db6baa45e",
+      "complexity": 0
+    },
+    "ui\\users_page.py": {
+      "lines": 669,
+      "size": 22624,
+      "modified": 1770564530.7993531,
+      "hash": "9b80f974e3dbb346974806a67a933e09",
+      "complexity": 0
+    },
+    "ui\\user_detail_dialog.py": {
+      "lines": 1718,
+      "size": 62591,
+      "modified": 1771456910.5456326,
+      "hash": "1dd6eb5ae147cb903215915b69b889f7",
+      "complexity": 0
+    },
+    "ui\\__init__.py": {
+      "lines": 0,
+      "size": 0,
+      "modified": 1769972891.5937362,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e",
+      "complexity": 0
+    },
+    "ui\\theme\\palettes.py": {
+      "lines": 116,
+      "size": 3179,
+      "modified": 1770815974.386235,
+      "hash": "d4373de18fd90b15e0514d71c2150d6f",
+      "complexity": 0
+    },
+    "ui\\theme\\theme_manager.py": {
+      "lines": 794,
+      "size": 20616,
+      "modified": 1770985056.0035455,
+      "hash": "19bd41a4a83de73c21205e658c324bb8",
+      "complexity": 0
+    },
+    "ui\\theme\\theme_picker.py": {
+      "lines": 234,
+      "size": 8133,
+      "modified": 1770985067.488692,
+      "hash": "fa822352df43a389e5366e8b9c317741",
+      "complexity": 0
+    },
+    "ui\\utils\\columns_prefs.py": {
+      "lines": 95,
+      "size": 2671,
+      "modified": 1770148874.6088455,
+      "hash": "101b140a33e9448e245460b12b81dd40",
+      "complexity": 0
+    },
+    "ui\\utils\\datetime_fmt.py": {
+      "lines": 246,
+      "size": 7524,
+      "modified": 1770811051.8989859,
+      "hash": "a32a3dcbcab727db3514947e5f96f461",
+      "complexity": 0
+    },
+    "ui\\utils\\dialog_responsive.py": {
+      "lines": 390,
+      "size": 11669,
+      "modified": 1771368709.4774172,
+      "hash": "3a2198a1aee37c27c039ec6d119bc415",
+      "complexity": 0
+    },
+    "ui\\utils\\search_ui.py": {
+      "lines": 45,
+      "size": 1135,
+      "modified": 1769960901.099517,
+      "hash": "87f4e53cd8987d8e81eade8ba6609192",
+      "complexity": 0
+    },
+    "ui\\utils\\table_columns.py": {
+      "lines": 322,
+      "size": 10338,
+      "modified": 1770543381.3909976,
+      "hash": "703a77258ecb837f001a3e99783ad1a1",
+      "complexity": 0
+    },
+    "ui\\utils\\table_copy.py": {
+      "lines": 317,
+      "size": 10206,
+      "modified": 1770284413.0263884,
+      "hash": "10ec9d9aece8bc5064ab70e174e4b65e",
+      "complexity": 0
+    },
+    "ui\\utils\\table_dragdrop.py": {
+      "lines": 103,
+      "size": 3622,
+      "modified": 1770143725.8687382,
+      "hash": "433b021f5b65d6f8c319ee643c6c1f2d",
+      "complexity": 0
+    },
+    "ui\\utils\\table_search_sort.py": {
+      "lines": 273,
+      "size": 8876,
+      "modified": 1770512297.8975537,
+      "hash": "355f2b997b73c4e2d1c38cd09da1a779",
+      "complexity": 0
+    },
+    "ui\\utils\\__init__.py": {
+      "lines": 4,
+      "size": 123,
+      "modified": 1769953540.8604357,
+      "hash": "3ba79a2cfd588f1d419a79071403489c",
+      "complexity": 0
+    },
+    "ui\\widgets\\datetime_widgets.py": {
+      "lines": 126,
+      "size": 4127,
+      "modified": 1769953598.690031,
+      "hash": "fb2bc6989b2d6684385deafb457367fb",
+      "complexity": 0
+    },
+    "ui\\widgets\\__init__.py": {
+      "lines": 4,
+      "size": 127,
+      "modified": 1769953561.7179854,
+      "hash": "473166d710f4c5f0e523fd308bbdd805",
+      "complexity": 0
+    }
+  },
+  "hash_index": {
+    "2ac26958b5333db2315dbc3b7a6c3f55": "app.py",
+    "8411993f3687b6dde288f417011faeb3": "linije.py",
+    "caa7a90b2d864ef7e4c12b993a8c0278": "linijetab.py",
+    "694c5bcf8666513293fea6adbf0f1d1e": "linijetab2.py",
+    "73242f4ebf97b721334298138f26f4b9": "linijetab3.py",
+    "0c3525221022470518b3f32ef8288d53": "linijetab4.py",
+    "da00d4a613d0dfd1d80759d43735e4f2": "linijetab5.py",
+    "591f20b4b22f7cc02a99960bf7371f8f": "linijetab6.py",
+    "0153a2798b0d732e2d113ebab2896034": "linijetab7.py",
+    "9e6347d3bce9538c47e014733b9f9747": "linijetab8.py",
+    "7af8d6bf0c483a2c54db75c70496623c": "linijetab9.py",
+    "92f880c6a2e1f56c448eb400c385d952": "core\\asset_quality.py",
+    "838adeb9c0a0a41832d69204631a4145": "core\\attachments_db.py",
+    "0039e148d377f6e9bf8ba5fe3d1a4bdb": "core\\attachments_store.py",
+    "ac74d803c82d3071a1e8b5a663bccd3f": "core\\backup.py",
+    "41179ba36378ee493739e64b6ffd2338": "core\\config.py",
+    "18ded22bc01fbfda0463106ec6286d40": "core\\db.py",
+    "3b74b97bea1b4644de9cde81fe2cb4cb": "core\\logger.py",
+    "a08b22f4e9bc11b83cb54422ec66e3b2": "core\\log_bundle.py",
+    "e8a807789c1f0aac71fb36232cfe9dce": "core\\paths.py",
+    "00d758d1ef8b5ae7a9fb3ffce2085df4": "core\\rbac.py",
+    "e32b6a31c9e018c7f1b98db0bb8f3189": "core\\selfcheck.py",
+    "6eb68babdc83f452ad9724e31e3b9468": "core\\session.py",
+    "d41d8cd98f00b204e9800998ecf8427e": "ui\\__init__.py",
+    "561d181b33241d2dd2139210f578ad63": "services\\assets_service.py",
+    "3650094230b81aa1aa0f7e5f973e890d": "services\\assignments_service.py",
+    "4ef8e60a5ef21657dd687f5acd2687d1": "services\\attachments_service.py",
+    "868879e91fa55f301cd6af3cdb635890": "services\\audit_service.py",
+    "48dc838d5011baebcc07faf40f836d2d": "services\\custom_fields_service.py",
+    "bf06b92e9e61144c1734299f38eb451f": "services\\dashboard_service.py",
+    "ea69a3a979b92f67ad4e1d851a9494dd": "services\\metrology_service.py",
+    "6e6db1ff4bdaddc09322db17d558e29b": "services\\my_assets_service.py",
+    "7eea9e638c022795cda8f15c797bbaf8": "services\\ui_table_view_service.py",
+    "1d78bc7c9fae30f8ed30d1bc2543a7c5": "services\\users_service.py",
+    "32af1529f65b611cd7317a1f5b5180d8": "services\\user_roles_service.py",
+    "cc3f1d799989e992589493d70dadb464": "services\\_rbac_guard.py",
+    "0cf31b2c283ce3431794586df7b0996d": "services\\__init__.py",
+    "fc16f0e10b7709f3f979b65b35e87cf6": "tests\\smoke_assets_page.py",
+    "d3dd0c5c076e227923d0eb949ca2114e": "tools\\full_smoke_test.py",
+    "a84b8d9d02821edf3a6e92b342ca407b": "tools\\full_smoke_testv1.py",
+    "8111ce668d709a85793512113bcd7090": "tools\\full_smoke_testv2.py",
+    "7aa19b128f859d6dbbbd3a99d9dc46c5": "tools\\scenario_smoke_test.py",
+    "874c3855d11b67689e3e347f7e7817f6": "tools\\scenario_smoke_testv1.py",
+    "e7f5a952aeb8b286e0ebf50420230776": "tools\\scenario_smoke_testv2.py",
+    "469aa2a7f14792f7e173cd0aab94d9b5": "tools\\scenario_smoke_testv3.py",
+    "60e980159a4a6f4a74cb3a19e59b3bfd": "tools\\scenario_smoke_testv4.py",
+    "62c2210320a7e77fad1b881a344e7c8c": "tools\\scenario_smoke_testv5.py",
+    "ee4989c2886caf174f12cb62f58bdcd6": "tools\\smoke_test.py",
+    "0b03c91084fb363e43e2a1895309bfe9": "tools\\smoke_testv3.py",
+    "41bd2af38bbb3be2d62fc5da023b6f52": "ui\\assets_page.py",
+    "a1ca1a1176b673cf8d1d8a461e08dd83": "ui\\asset_detail_dialog.py",
+    "5eaa940004e96f1c2ddb58853fd80f2f": "ui\\asset_edit_dialog.py",
+    "deff2244939cb63c6af676fd4c830a03": "ui\\assignments_page.py",
+    "fc3a0f8af819a953451706e10b12bae9": "ui\\audit_page.py",
+    "1c63e23c473ed3a78a1ef9fe17ba8514": "ui\\columns_dialog.py",
+    "b2fc014ae765f8ff9c634cb058928002": "ui\\column_manager_dialog.py",
+    "6ee2c0105d0cec63c2e5312159acbf8a": "ui\\custom_fields_page.py",
+    "b3c89ae97619c8c9f04aa1335e59b728": "ui\\dashboard_page.py",
+    "e741d3b795a13e5182a80dd83af39d82": "ui\\login_dialog.py",
+    "585a992dd2b17d1be71380f307b65811": "ui\\metrology_dashboard_page.py",
+    "3da1f47ad305c06816aa2e88104c1303": "ui\\metrology_page.py",
+    "25a6ca9aa2fd7a9e8f13cf3e4335899c": "ui\\my_assets_page.py",
+    "b0d2164b5fb14ae94e7ec1ec1e12d4cb": "ui\\new_asset_dialog.py",
+    "bc0e432812de8908540d535212881a25": "ui\\role_switch_dialog.py",
+    "75c8c41693ca2299bae60c2db6baa45e": "ui\\settings_page.py",
+    "9b80f974e3dbb346974806a67a933e09": "ui\\users_page.py",
+    "1dd6eb5ae147cb903215915b69b889f7": "ui\\user_detail_dialog.py",
+    "d4373de18fd90b15e0514d71c2150d6f": "ui\\theme\\palettes.py",
+    "19bd41a4a83de73c21205e658c324bb8": "ui\\theme\\theme_manager.py",
+    "fa822352df43a389e5366e8b9c317741": "ui\\theme\\theme_picker.py",
+    "101b140a33e9448e245460b12b81dd40": "ui\\utils\\columns_prefs.py",
+    "a32a3dcbcab727db3514947e5f96f461": "ui\\utils\\datetime_fmt.py",
+    "3a2198a1aee37c27c039ec6d119bc415": "ui\\utils\\dialog_responsive.py",
+    "87f4e53cd8987d8e81eade8ba6609192": "ui\\utils\\search_ui.py",
+    "703a77258ecb837f001a3e99783ad1a1": "ui\\utils\\table_columns.py",
+    "10ec9d9aece8bc5064ab70e174e4b65e": "ui\\utils\\table_copy.py",
+    "433b021f5b65d6f8c319ee643c6c1f2d": "ui\\utils\\table_dragdrop.py",
+    "355f2b997b73c4e2d1c38cd09da1a779": "ui\\utils\\table_search_sort.py",
+    "3ba79a2cfd588f1d419a79071403489c": "ui\\utils\\__init__.py",
+    "fb2bc6989b2d6684385deafb457367fb": "ui\\widgets\\datetime_widgets.py",
+    "473166d710f4c5f0e523fd308bbdd805": "ui\\widgets\\__init__.py"
+  },
+  "stats": {
+    "total_files": 82,
+    "total_lines": 50780,
+    "total_size": 1797371
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "ok": [
+    {
+      "import": "PySide6",
+      "pip": "PySide6",
+      "version": "6.10.1"
+    },
+    {
+      "import": "openpyxl",
+      "pip": "openpyxl",
+      "version": "3.1.5"
+    },
+    {
+      "import": "docx",
+      "pip": "python-docx",
+      "version": "1.2.0"
+    },
+    {
+      "import": "reportlab",
+      "pip": "reportlab",
+      "version": "4.4.9"
+    }
+  ],
+  "missing": [],
+  "meta": {
+    "python": "3.14.2 (tags/v3.14.2:df79316, Dec  5 2025, 17:18:21) [MSC v.1944 64 bit (AMD64)]",
+    "exe": "C:\\Users\\marko\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe"
+  }
+}

@@ -1,0 +1,1014 @@
+# FILENAME: ui/metrology_dashboard_page.py
+# (FILENAME: ui/metrology_dashboard_page.py - START)  # Part 1/2
+# -*- coding: utf-8 -*-
+"""
+BazaS2 (offline) — ui/metrology_dashboard_page.py
+
+Metrologija Dashboard (V1):
+- KPI kartice: ISTEKLO / ISTIČE / OK / UKUPNO
+- Tabela: sredstva + status metrologije + važi do + met UID + nosilac + sektor + lokacija + zaduženo od
+- Filteri: pretraga, samo isteklo, samo ističe, samo moja sredstva, warn days (7/14/30/60/90)
+- Akcije: dvoklik -> detalj sredstva; dvoklik na met kolone -> detalji metrologije; dugme -> lista metrologije
+
+Cilj ovog fajla:
+- stabilan UI (bez "ružno / nečitko")
+- pro dark theme (jasne linije kolona + čitljiv header + diskretna zebra)
+- sortiranje po kolonama (valid_until kao datum, zaduženo od kao datetime)
+- status boje kao "badge" u STATUS koloni, ne preko cele tabele
+"""
+
+from __future__ import annotations
+
+import logging
+import sqlite3
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import date
+from typing import Any, Dict, List, Optional, Tuple
+
+from PySide6.QtCore import Qt  # type: ignore
+from PySide6.QtGui import QColor, QBrush  # type: ignore
+from PySide6.QtWidgets import (  # type: ignore
+    QWidget,
+    QHBoxLayout,
+    QVBoxLayout,
+    QLabel,
+    QPushButton,
+    QLineEdit,
+    QTableWidget,
+    QTableWidgetItem,
+    QMessageBox,
+    QAbstractItemView,
+    QComboBox,
+    QCheckBox,
+    QFrame,
+    QMenu,
+    QHeaderView,
+    QSizePolicy,
+)
+
+# postojeći utili (best-effort)
+try:
+    from ui.utils.datetime_fmt import fmt_dt_sr, fmt_date_sr  # type: ignore
+except Exception:  # pragma: no cover
+    def fmt_dt_sr(x: str) -> str:
+        return (x or "").strip()
+
+    def fmt_date_sr(x: str) -> str:
+        return (x or "").strip()
+
+try:
+    from ui.utils.table_copy import (  # type: ignore
+        wire_table_selection_plus_copy,
+        wire_table_header_plus_copy,
+        copy_selected_cells,
+    )
+except Exception:  # pragma: no cover
+    wire_table_selection_plus_copy = None
+    wire_table_header_plus_copy = None
+
+    def copy_selected_cells(tbl: QTableWidget) -> None:
+        # fallback: ništa
+        return
+
+
+# -------------------- RBAC helpers (UI-level, fail-closed) --------------------
+try:
+    from core.rbac import PERM_METRO_VIEW  # type: ignore
+except Exception:  # pragma: no cover
+    PERM_METRO_VIEW = "metrology.view"
+
+
+def _can(perm: str) -> bool:
+    try:
+        from core.session import can  # type: ignore
+        return bool(can(perm))
+    except Exception:
+        return False
+
+
+def _get_current_user_dict() -> Dict[str, Any]:
+    try:
+        from core.session import get_current_user  # type: ignore
+        return dict(get_current_user() or {})
+    except Exception:
+        return {}
+
+
+def _actor_name_safe() -> str:
+    try:
+        from core.session import actor_name  # type: ignore
+        return (actor_name() or "user").strip() or "user"
+    except Exception:
+        return "user"
+
+
+def _actor_key_safe() -> str:
+    try:
+        from core.session import actor_key  # type: ignore
+        return (actor_key() or "").strip()
+    except Exception:
+        return ""
+
+
+def _norm(s: Any) -> str:
+    return ("" if s is None else str(s)).strip().casefold()
+
+
+def _identity_candidates() -> List[str]:
+    u = _get_current_user_dict()
+    cand: List[str] = []
+
+    ak = _actor_key_safe()
+    if ak:
+        cand.append(ak)
+
+    an = _actor_name_safe()
+    if an:
+        cand.append(an)
+
+    for k in ("username", "login", "email", "display_name", "name", "full_name", "user"):
+        v = u.get(k)
+        if v:
+            cand.append(str(v))
+
+    for k in ("id", "user_id", "uid"):
+        v = u.get(k)
+        if v is not None and str(v).strip():
+            cand.append(str(v).strip())
+
+    out: List[str] = []
+    seen = set()
+    for c in cand:
+        cc = _norm(c)
+        if cc and cc not in seen:
+            seen.add(cc)
+            out.append(cc)
+    return out
+
+
+def _holder_matches_me(holder_value: Any) -> bool:
+    h = _norm(holder_value)
+    if not h:
+        return False
+    cands = _identity_candidates()
+    for c in cands:
+        if h == c:
+            return True
+    for c in cands:
+        if c and (c in h or h in c):
+            return True
+    return False
+
+
+def _copy_text_to_clipboard(text: str) -> None:
+    try:
+        from PySide6.QtWidgets import QApplication  # type: ignore
+        QApplication.clipboard().setText(text or "")
+    except Exception:
+        pass
+
+
+def _wire_table_copy(table: QTableWidget) -> None:
+    try:
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SingleSelection)
+    except Exception:
+        pass
+
+    try:
+        if wire_table_selection_plus_copy is not None:
+            wire_table_selection_plus_copy(table)
+            return
+    except Exception:
+        pass
+
+    try:
+        if wire_table_header_plus_copy is not None:
+            wire_table_header_plus_copy(table)
+    except Exception:
+        pass
+
+
+# -------------------- DB helpers --------------------
+@contextmanager
+def _connect_db():
+    try:
+        from core.db import db_conn  # type: ignore
+        with db_conn() as conn:
+            try:
+                conn.row_factory = sqlite3.Row
+            except Exception:
+                pass
+            yield conn
+            return
+    except Exception:
+        pass
+
+    # last-resort fallback (ne rušimo UI)
+    conn = sqlite3.connect("data/db/bazas2.sqlite")
+    try:
+        conn.row_factory = sqlite3.Row
+    except Exception:
+        pass
+    try:
+        yield conn
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    try:
+        r = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1;",
+            (name,),
+        ).fetchone()
+        return bool(r)
+    except Exception:
+        return False
+
+
+def _cols(conn: sqlite3.Connection, table: str) -> List[str]:
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table});").fetchall()
+        out: List[str] = []
+        for r in rows:
+            try:
+                out.append(str(r["name"]))
+            except Exception:
+                out.append(str(r[1]))
+        return out
+    except Exception:
+        return []
+
+
+def _pick_col(cols: List[str], candidates: Tuple[str, ...]) -> str:
+    s = set(cols or [])
+    for c in candidates:
+        if c in s:
+            return c
+    return ""
+
+
+def _met_status(valid_until_iso: str, warn_days: int) -> str:
+    vu = (valid_until_iso or "").strip()
+    if not vu:
+        return "NEPOZNATO"
+    try:
+        y, m, d = [int(x) for x in vu.split("-")]
+        vu_date = date(y, m, d)
+    except Exception:
+        return "NEPOZNATO"
+
+    today = date.today()
+    if vu_date < today:
+        return "ISTEKLO"
+
+    try:
+        wd = int(warn_days)
+    except Exception:
+        wd = 30
+
+    if (vu_date - today).days <= wd:
+        return "ISTIČE"
+    return "OK"
+
+
+@dataclass
+class MetroDashRow:
+    asset_uid: str
+    name: str
+    category: str
+    holder: str
+    sector: str
+    location: str
+    last_assigned_at: str
+    met_uid: str
+    valid_until: str
+    status: str
+
+
+def _fetch_dashboard_rows(
+    warn_days: int = 30,
+    search_q: str = "",
+) -> List[MetroDashRow]:
+    q = (search_q or "").strip().casefold()
+
+    with _connect_db() as conn:
+        if not _table_exists(conn, "assets") or not _table_exists(conn, "metrology_records"):
+            return []
+
+        a_cols = _cols(conn, "assets")
+        m_cols = _cols(conn, "metrology_records")
+
+        col_uid = _pick_col(a_cols, ("asset_uid", "uid"))
+        col_name = _pick_col(a_cols, ("name", "naziv", "asset_name"))
+        col_cat = _pick_col(a_cols, ("category", "kategorija", "cat"))
+        col_holder = _pick_col(a_cols, ("current_holder", "assigned_to", "holder", "zaduzeno_kod", "kod_koga"))
+        col_sector = _pick_col(a_cols, ("sector", "sektor", "org_unit", "unit", "department", "dept"))
+        col_loc = _pick_col(a_cols, ("location", "lokacija", "loc"))
+        col_assigned_at = _pick_col(a_cols, ("last_assigned_at", "assigned_at", "zaduzeno_od", "assigned_time"))
+        col_updated = _pick_col(a_cols, ("updated_at", "modified_at", "updated", "last_update"))
+
+        col_m_asset = _pick_col(m_cols, ("asset_uid",))
+        col_m_uid = _pick_col(m_cols, ("met_uid", "uid"))
+        col_m_valid = _pick_col(m_cols, ("valid_until",))
+        col_m_updated = _pick_col(m_cols, ("updated_at", "modified_at", "updated"))
+
+        if not col_uid or not col_m_asset or not col_m_uid or not col_m_valid:
+            return []
+
+        last_time_col = col_assigned_at if col_assigned_at else col_updated
+
+        sql = f"""
+        WITH latest_valid AS (
+            SELECT
+                {col_m_asset} AS asset_uid,
+                MAX(date({col_m_valid})) AS max_vu
+            FROM metrology_records
+            WHERE COALESCE(is_deleted,0)=0
+              AND COALESCE({col_m_valid}, '') <> ''
+            GROUP BY {col_m_asset}
+        ),
+        latest_pick AS (
+            SELECT
+                mr.{col_m_asset} AS asset_uid,
+                mr.{col_m_uid} AS met_uid,
+                mr.{col_m_valid} AS valid_until,
+                COALESCE(mr.{col_m_updated}, '') AS updated_at
+            FROM metrology_records mr
+            JOIN latest_valid lv
+              ON lv.asset_uid = mr.{col_m_asset}
+             AND date(mr.{col_m_valid}) = lv.max_vu
+            WHERE COALESCE(mr.is_deleted,0)=0
+        ),
+        latest_one AS (
+            SELECT lp.*
+            FROM latest_pick lp
+            JOIN (
+                SELECT asset_uid, MAX(datetime(updated_at)) AS mx
+                FROM latest_pick
+                GROUP BY asset_uid
+            ) t
+            ON t.asset_uid = lp.asset_uid AND datetime(lp.updated_at) = t.mx
+        )
+        SELECT
+            a.{col_uid} AS asset_uid,
+            COALESCE(a.{col_name}, '') AS name,
+            COALESCE(a.{col_cat}, '') AS category,
+            COALESCE(a.{col_holder}, '') AS holder,
+            COALESCE(a.{col_sector}, '') AS sector,
+            COALESCE(a.{col_loc}, '') AS location,
+            COALESCE(a.{last_time_col}, '') AS last_assigned_at,
+            COALESCE(l.met_uid, '') AS met_uid,
+            COALESCE(l.valid_until, '') AS valid_until
+        FROM assets a
+        LEFT JOIN latest_one l
+          ON l.asset_uid = a.{col_uid}
+        WHERE 1=1
+        ;
+        """
+
+        try:
+            rows = conn.execute(sql).fetchall()
+        except Exception:
+            return []
+
+        out: List[MetroDashRow] = []
+        for r in rows:
+            try:
+                asset_uid = str(r["asset_uid"] or "").strip()
+                name = str(r["name"] or "").strip()
+                category = str(r["category"] or "").strip()
+                holder = str(r["holder"] or "").strip()
+                sector = str(r["sector"] or "").strip()
+                location = str(r["location"] or "").strip()
+                last_assigned_at = str(r["last_assigned_at"] or "").strip()
+                met_uid = str(r["met_uid"] or "").strip()
+                valid_until = str(r["valid_until"] or "").strip()
+            except Exception:
+                continue
+
+            if not asset_uid:
+                continue
+
+            st = _met_status(valid_until, warn_days)
+
+            if q:
+                hay = " ".join([asset_uid, name, category, holder, sector, location, st, met_uid, valid_until]).casefold()
+                if q not in hay:
+                    continue
+
+            out.append(
+                MetroDashRow(
+                    asset_uid=asset_uid,
+                    name=name,
+                    category=category,
+                    holder=holder,
+                    sector=sector,
+                    location=location,
+                    last_assigned_at=last_assigned_at,
+                    met_uid=met_uid,
+                    valid_until=valid_until,
+                    status=st,
+                )
+            )
+
+        # stabilan default sort (status rank + valid_until + uid)
+        order_rank = {"ISTEKLO": 0, "ISTIČE": 1, "OK": 2, "NEPOZNATO": 3}
+
+        def _key(x: MetroDashRow):
+            vu = x.valid_until or "9999-12-31"
+            return (order_rank.get(x.status, 9), vu, x.asset_uid)
+
+        out.sort(key=_key)
+        return out
+
+
+def _kpi_counts(rows: List[MetroDashRow]) -> Dict[str, int]:
+    c = {"ISTEKLO": 0, "ISTIČE": 0, "OK": 0, "NEPOZNATO": 0, "UKUPNO": 0}
+    c["UKUPNO"] = len(rows)
+    for r in rows:
+        if r.status in c:
+            c[r.status] += 1
+        else:
+            c["NEPOZNATO"] += 1
+    return c
+
+
+# -------------------- Styling (pro dark theme) --------------------
+DASH_QSS = """
+QWidget { background: #14161c; color: #e6e8ef; font-size: 12px; }
+QLabel#title { font-size: 20px; font-weight: 800; }
+
+QLineEdit {
+  background: #1b1e27;
+  border: 1px solid #2a2f3c;
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+QLineEdit:focus { border: 1px solid #2e6bff; }
+
+QComboBox {
+  background: #1b1e27;
+  border: 1px solid #2a2f3c;
+  border-radius: 10px;
+  padding: 6px 10px;
+}
+QComboBox::drop-down { border: 0px; width: 22px; }
+QComboBox QAbstractItemView {
+  background: #1b1e27;
+  selection-background-color: #24355f;
+  border: 1px solid #2a2f3c;
+}
+
+QCheckBox { spacing: 8px; }
+QCheckBox::indicator {
+  width: 16px; height: 16px;
+  border-radius: 4px;
+  border: 1px solid #2a2f3c;
+  background: #1b1e27;
+}
+QCheckBox::indicator:checked { background: #2e6bff; border: 1px solid #2e6bff; }
+
+QPushButton {
+  background: #1b1e27;
+  border: 1px solid #2a2f3c;
+  border-radius: 10px;
+  padding: 8px 14px;
+}
+QPushButton:hover { border: 1px solid #2e6bff; }
+QPushButton:disabled { color: #77809a; background: #171922; border: 1px solid #232735; }
+
+QPushButton#primary {
+  background: #2e6bff;
+  border: 1px solid #2e6bff;
+  color: #ffffff;
+  font-weight: 800;
+}
+
+QFrame#kpiCard {
+  background: #181b24;
+  border: 1px solid #2a2f3c;
+  border-radius: 14px;
+}
+QFrame#kpiCard:hover { border: 1px solid #2e6bff; }
+
+QFrame#kpiAccent { border-radius: 3px; }
+
+QTableWidget {
+  background: #151823;
+  border: 1px solid #232735;
+  border-radius: 12px;
+  gridline-color: #2b3140;
+  alternate-background-color: #141a27;
+  selection-background-color: #24355f;
+  selection-color: #ffffff;
+}
+
+QHeaderView::section {
+  background: #1b1e27;
+  color: #d7dbe6;
+  border: 0px;
+  border-bottom: 1px solid #2b3140;
+  border-right: 1px solid #2b3140;
+  padding: 8px 10px;
+  font-weight: 900;
+}
+
+QTableWidget::item {
+  padding: 7px 10px;
+  border-bottom: 1px solid #232a38;
+  border-right: 1px solid #232a38;
+  color: #d7dbe6;
+}
+
+QTableWidget::item:hover { background: #1a2340; }
+QTableWidget::item:selected { background: #24355f; color: #ffffff; }
+"""
+
+
+class _KpiCard(QFrame):
+    def __init__(self, title: str, accent_color: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("kpiCard")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(10)
+
+        self.accent = QFrame()
+        self.accent.setObjectName("kpiAccent")
+        self.accent.setFixedWidth(6)
+        self.accent.setStyleSheet(f"QFrame#kpiAccent {{ background: {accent_color}; }}")
+
+        right = QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(2)
+
+        self.lb_title = QLabel(title)
+        self.lb_title.setStyleSheet("font-size: 12px; color: #aab2c5; font-weight: 700;")
+
+        self.lb_value = QLabel("0")
+        self.lb_value.setStyleSheet("font-size: 22px; font-weight: 900; color: #ffffff;")
+
+        right.addWidget(self.lb_title)
+        right.addWidget(self.lb_value, 1)
+
+        lay.addWidget(self.accent)
+        lay.addLayout(right, 1)
+
+    def set_value(self, v: int) -> None:
+        try:
+            self.lb_value.setText(str(int(v)))
+        except Exception:
+            self.lb_value.setText("0")
+
+
+def _set_sort_data(item: QTableWidgetItem, sort_value: Any) -> None:
+    # QTableWidget sorting koristi EditRole pre DisplayRole u praksi (bezbedno),
+    # pa ovde guramo pravi sort key u EditRole.
+    try:
+        item.setData(Qt.EditRole, sort_value)
+    except Exception:
+        pass
+
+
+# -------------------- Main Page --------------------
+class MetrologyDashboardPage(QWidget):
+    COLS = [
+        "Status", "Važi do", "Met UID",
+        "UID", "Naziv", "Kategorija",
+        "Nosilac", "Sektor", "Lokacija", "Zaduženo od",
+    ]
+
+    C_STATUS = 0
+    C_VALID_UNTIL = 1
+    C_MET_UID = 2
+    C_UID = 3
+    C_NAME = 4
+    C_CAT = 5
+    C_HOLDER = 6
+    C_SECTOR = 7
+    C_LOC = 8
+    C_ASSIGNED = 9
+
+    def __init__(self, logger: logging.Logger, parent=None):
+        super().__init__(parent)
+        self.logger = logger
+        self._rows: List[MetroDashRow] = []
+
+        self.setStyleSheet(DASH_QSS)
+
+        # --- Header row ---
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(10)
+
+        title = QLabel("Metrologija Dashboard")
+        title.setObjectName("title")
+        top.addWidget(title)
+        top.addStretch(1)
+
+        self.ed_search = QLineEdit()
+        self.ed_search.setPlaceholderText("Pretraga (UID / naziv / nosilac / sektor / status)...")
+        self.ed_search.setClearButtonEnabled(True)
+        self.ed_search.setFixedWidth(520)
+        top.addWidget(self.ed_search)
+
+        self.lbl_warn = QLabel("Alarm (dana):")
+        self.cb_warn = QComboBox()
+        self.cb_warn.addItems(["7", "14", "30", "60", "90"])
+        self.cb_warn.setCurrentText("30")
+        self.cb_warn.setFixedWidth(90)
+        top.addWidget(self.lbl_warn)
+        top.addWidget(self.cb_warn)
+
+        self.btn_refresh = QPushButton("Osveži")
+        self.btn_refresh.setObjectName("primary")
+        self.btn_refresh.setFixedWidth(120)
+        top.addWidget(self.btn_refresh)
+
+        # --- KPI row ---
+        kpi = QHBoxLayout()
+        kpi.setSpacing(12)
+        self.kpi_overdue = _KpiCard("Isteklo", "#ff4d57")
+        self.kpi_due = _KpiCard("Ističe uskoro", "#ffcc00")
+        self.kpi_ok = _KpiCard("Validno", "#22c55e")
+        self.kpi_total = _KpiCard("Ukupno", "#3b82f6")
+        kpi.addWidget(self.kpi_overdue)
+        kpi.addWidget(self.kpi_due)
+        kpi.addWidget(self.kpi_ok)
+        kpi.addWidget(self.kpi_total)
+        kpi.addStretch(1)
+
+        # --- Filters row ---
+        flt = QHBoxLayout()
+        flt.setSpacing(14)
+
+        self.ck_overdue = QCheckBox("Samo isteklo")
+        self.ck_due = QCheckBox("Samo ističe")
+        self.ck_my = QCheckBox("Samo moja sredstva")
+        flt.addWidget(self.ck_overdue)
+        flt.addWidget(self.ck_due)
+        flt.addWidget(self.ck_my)
+        flt.addStretch(1)
+
+        self.btn_open_asset = QPushButton("Otvori sredstvo")
+        self.btn_open_asset.setEnabled(False)
+        flt.addWidget(self.btn_open_asset)
+
+        self.btn_open_met_list = QPushButton("Otvori metrologiju (lista)")
+        self.btn_open_met_list.setEnabled(False)
+        flt.addWidget(self.btn_open_met_list)
+
+        # --- Table ---
+        self.tbl = QTableWidget(0, len(self.COLS))
+        self.tbl.setHorizontalHeaderLabels(self.COLS)
+        self.tbl.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tbl.setAlternatingRowColors(True)
+        self.tbl.setShowGrid(True)
+        self.tbl.setGridStyle(Qt.SolidLine)
+        self.tbl.verticalHeader().setVisible(False)
+
+        self.tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl.setSelectionMode(QAbstractItemView.SingleSelection)
+
+        hdr = self.tbl.horizontalHeader()
+        hdr.setDefaultAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        hdr.setFixedHeight(36)
+        hdr.setSectionResizeMode(QHeaderView.Interactive)
+        hdr.setStretchLastSection(True)
+
+        self.tbl.verticalHeader().setDefaultSectionSize(30)
+        self.tbl.setSortingEnabled(True)
+
+        # widths (pro default)
+        self.tbl.setColumnWidth(self.C_STATUS, 110)
+        self.tbl.setColumnWidth(self.C_VALID_UNTIL, 110)
+        self.tbl.setColumnWidth(self.C_MET_UID, 170)
+        self.tbl.setColumnWidth(self.C_UID, 140)
+        self.tbl.setColumnWidth(self.C_NAME, 260)
+        self.tbl.setColumnWidth(self.C_CAT, 120)
+        self.tbl.setColumnWidth(self.C_HOLDER, 140)
+        self.tbl.setColumnWidth(self.C_SECTOR, 90)
+        self.tbl.setColumnWidth(self.C_LOC, 120)
+        self.tbl.setColumnWidth(self.C_ASSIGNED, 150)
+
+        _wire_table_copy(self.tbl)
+
+        self.tbl.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tbl.customContextMenuRequested.connect(self._on_context_menu)
+        self.tbl.itemSelectionChanged.connect(self._sync_buttons)
+        self.tbl.cellDoubleClicked.connect(self._on_double_click)
+
+        # --- RBAC label ---
+        self.lb_rbac = QLabel("")
+        self.lb_rbac.setStyleSheet("color: #ff7b7b; font-weight: 700;")
+        self.lb_rbac.setVisible(False)
+        self.lb_rbac.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        # --- Layout ---
+        main = QVBoxLayout(self)
+        main.setContentsMargins(12, 12, 12, 12)
+        main.setSpacing(12)
+        main.addLayout(top)
+        main.addLayout(kpi)
+        main.addLayout(flt)
+        main.addWidget(self.lb_rbac)
+        main.addWidget(self.tbl, 1)
+
+        # --- Signals ---
+        self.btn_refresh.clicked.connect(self.refresh)
+        self.ed_search.textChanged.connect(self._apply_filter)
+        self.cb_warn.currentIndexChanged.connect(self._apply_filter)
+        self.ck_overdue.stateChanged.connect(self._apply_filter)
+        self.ck_due.stateChanged.connect(self._apply_filter)
+        self.ck_my.stateChanged.connect(self._apply_filter)
+        self.btn_open_asset.clicked.connect(self._open_asset)
+        self.btn_open_met_list.clicked.connect(self._open_metrology_list)
+
+        self._apply_rbac()
+        self.refresh()
+
+    def _apply_rbac(self) -> None:
+        ok = _can(PERM_METRO_VIEW)
+        for w in (self.tbl, self.ed_search, self.cb_warn, self.ck_overdue, self.ck_due, self.ck_my, self.btn_refresh):
+            try:
+                w.setEnabled(ok)
+            except Exception:
+                pass
+
+        if not ok:
+            self.tbl.setRowCount(0)
+            self.lb_rbac.setText("RBAC: nemaš pravo da vidiš metrologija dashboard (metrology.view).")
+            self.lb_rbac.setVisible(True)
+        else:
+            self.lb_rbac.setVisible(False)
+
+    def _warn_days(self) -> int:
+        try:
+            return int(self.cb_warn.currentText())
+        except Exception:
+            return 30
+
+    def _selected_asset_uid(self) -> str:
+        r = self.tbl.currentRow()
+        if r < 0:
+            return ""
+        it = self.tbl.item(r, self.C_UID)
+        return it.text().strip() if it else ""
+
+    def _selected_met_uid(self) -> str:
+        r = self.tbl.currentRow()
+        if r < 0:
+            return ""
+        it = self.tbl.item(r, self.C_MET_UID)
+        return it.text().strip() if it else ""
+
+    def _sync_buttons(self) -> None:
+        has = self.tbl.currentRow() >= 0
+        self.btn_open_asset.setEnabled(has)
+        self.btn_open_met_list.setEnabled(has)
+
+    def refresh(self) -> None:
+        self._apply_rbac()
+        if not _can(PERM_METRO_VIEW):
+            return
+
+        try:
+            self._rows = _fetch_dashboard_rows(
+                warn_days=self._warn_days(),
+                search_q="",  # primenjujemo search na UI strani zbog checkbox filtera
+            )
+        except Exception as e:
+            self._rows = []
+            QMessageBox.critical(self, "Greška", f"Ne mogu da učitam dashboard.\n\n{e}")
+            return
+
+        c = _kpi_counts(self._rows)
+        self.kpi_overdue.set_value(c.get("ISTEKLO", 0))
+        self.kpi_due.set_value(c.get("ISTIČE", 0))
+        self.kpi_ok.set_value(c.get("OK", 0))
+        self.kpi_total.set_value(c.get("UKUPNO", 0))
+
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        if not _can(PERM_METRO_VIEW):
+            return
+
+        warn_days = self._warn_days()
+        q = (self.ed_search.text() or "").strip().casefold()
+        only_overdue = bool(self.ck_overdue.isChecked())
+        only_due = bool(self.ck_due.isChecked())
+        only_my = bool(self.ck_my.isChecked())
+
+        # UX: ako su oba čekirana => OR
+        rows: List[MetroDashRow] = []
+        for r in (self._rows or []):
+            st = _met_status(r.valid_until, warn_days)
+            rr = MetroDashRow(**{**r.__dict__, "status": st})
+
+            if only_my and not _holder_matches_me(rr.holder):
+                continue
+
+            if only_overdue or only_due:
+                ok = False
+                if only_overdue and rr.status == "ISTEKLO":
+                    ok = True
+                if only_due and rr.status == "ISTIČE":
+                    ok = True
+                if not ok:
+                    continue
+
+            if q:
+                hay = " ".join([
+                    rr.asset_uid, rr.name, rr.category,
+                    rr.holder, rr.sector, rr.location,
+                    rr.status, rr.met_uid, rr.valid_until, rr.last_assigned_at
+                ]).casefold()
+                if q not in hay:
+                    continue
+
+            rows.append(rr)
+
+        # render
+        self._render(rows)
+
+    def _render(self, rows: List[MetroDashRow]) -> None:
+        try:
+            self.tbl.setSortingEnabled(False)
+            self.tbl.setUpdatesEnabled(False)
+            self.tbl.setRowCount(0)
+
+            for rr in rows:
+                i = self.tbl.rowCount()
+                self.tbl.insertRow(i)
+
+                # zebra background
+                base_bg = QBrush(QColor("#151823" if (i % 2 == 0) else "#141a27"))
+
+                vals = [
+                    rr.status,
+                    fmt_date_sr(rr.valid_until or ""),
+                    rr.met_uid,
+                    rr.asset_uid,
+                    rr.name,
+                    rr.category,
+                    rr.holder,
+                    rr.sector,
+                    rr.location,
+                    fmt_dt_sr(rr.last_assigned_at or ""),
+                ]
+
+                for cc, v in enumerate(vals):
+                    item = QTableWidgetItem(str(v))
+                    item.setBackground(base_bg)
+
+                    # alignment
+                    if cc in (self.C_STATUS, self.C_VALID_UNTIL, self.C_MET_UID, self.C_UID, self.C_SECTOR, self.C_LOC, self.C_ASSIGNED):
+                        item.setTextAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+                    else:
+                        item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+                    # STATUS badge coloring (samo u status ćeliji)
+                    if cc == self.C_STATUS:
+                        st = (rr.status or "").strip().upper()
+                        f = item.font()
+                        f.setBold(True)
+                        item.setFont(f)
+
+                        if st == "ISTEKLO":
+                            item.setForeground(QBrush(QColor("#ffd0d4")))
+                            item.setBackground(QBrush(QColor("#2a1214")))
+                        elif st == "ISTIČE":
+                            item.setForeground(QBrush(QColor("#ffe8b8")))
+                            item.setBackground(QBrush(QColor("#2a2412")))
+                        elif st == "OK":
+                            item.setForeground(QBrush(QColor("#c8f7d6")))
+                            item.setBackground(QBrush(QColor("#102417")))
+                        else:
+                            item.setForeground(QBrush(QColor("#d7dbe6")))
+                            item.setBackground(QBrush(QColor("#171923")))
+
+                        _set_sort_data(item, st)
+
+                    elif cc == self.C_VALID_UNTIL:
+                        # sort by ISO date (fallback far future)
+                        _set_sort_data(item, rr.valid_until or "9999-12-31")
+
+                    elif cc == self.C_ASSIGNED:
+                        # sort by raw datetime string
+                        _set_sort_data(item, rr.last_assigned_at or "")
+
+                    else:
+                        _set_sort_data(item, str(v))
+
+                    self.tbl.setItem(i, cc, item)
+
+            self.tbl.resizeRowsToContents()
+        finally:
+            try:
+                self.tbl.setUpdatesEnabled(True)
+                self.tbl.setSortingEnabled(True)
+            except Exception:
+                pass
+
+        self._sync_buttons()
+# (FILENAME: ui/metrology_dashboard_page.py - END)  # Part 1/2
+
+# FILENAME: ui/metrology_dashboard_page.py
+# (FILENAME: ui/metrology_dashboard_page.py - START)  # Part 2/2
+
+    def _open_asset(self) -> None:
+        asset_uid = self._selected_asset_uid()
+        if not asset_uid:
+            return
+        try:
+            from ui.asset_detail_dialog import AssetDetailDialog  # type: ignore
+            dlg = AssetDetailDialog(asset_uid, self)
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.information(self, "Info", f"Ne mogu da otvorim detalje sredstva.\n\n{e}")
+
+    def _open_metrology_details(self) -> None:
+        met_uid = self._selected_met_uid()
+        if not met_uid:
+            QMessageBox.information(self, "Info", "Nema metrologija zapisa (met_uid je prazan).")
+            return
+        try:
+            from ui.metrology_page import MetrologyDetailsDialog  # type: ignore
+            dlg = MetrologyDetailsDialog(met_uid, parent=self, warn_days=self._warn_days())
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.information(self, "Info", f"Ne mogu da otvorim detalje metrologije.\n\n{e}")
+
+    def _open_metrology_list(self) -> None:
+        asset_uid = self._selected_asset_uid()
+        if not asset_uid:
+            return
+        try:
+            from ui.my_assets_page import MetrologyForAssetDialog  # type: ignore
+            dlg = MetrologyForAssetDialog(asset_uid, warn_days=self._warn_days(), parent=self)
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.information(self, "Info", f"Ne mogu da otvorim listu metrologije.\n\n{e}")
+
+    def _on_double_click(self, r: int, c: int) -> None:
+        # status / važi do / met_uid -> metrology details/list
+        if c in (self.C_STATUS, self.C_VALID_UNTIL, self.C_MET_UID):
+            if self._selected_met_uid():
+                self._open_metrology_details()
+            else:
+                self._open_metrology_list()
+            return
+        # ostalo -> asset detail
+        self._open_asset()
+
+    def _on_context_menu(self, pos) -> None:
+        try:
+            it = self.tbl.itemAt(pos)
+            if it is not None:
+                self.tbl.setCurrentCell(it.row(), it.column())
+
+            cur = self.tbl.currentItem()
+            cell_text = cur.text() if cur else ""
+
+            uid = self._selected_asset_uid()
+            met_uid = self._selected_met_uid()
+
+            menu = QMenu(self)
+            act_copy_cell = menu.addAction("Kopiraj ćeliju")
+            act_copy_sel = menu.addAction("Kopiraj selekciju (TSV)")
+            menu.addSeparator()
+
+            act_copy_uid = menu.addAction("Kopiraj Asset UID") if uid else None
+            act_copy_met = menu.addAction("Kopiraj Met UID") if met_uid else None
+
+            menu.addSeparator()
+            act_open_asset = menu.addAction("Otvori sredstvo") if uid else None
+            act_open_met_details = menu.addAction("Otvori metrologiju (detalji)") if met_uid else None
+            act_open_met_list = menu.addAction("Otvori metrologiju (lista)") if uid else None
+
+            chosen = menu.exec(self.tbl.viewport().mapToGlobal(pos))
+            if chosen == act_copy_cell:
+                _copy_text_to_clipboard(cell_text)
+            elif chosen == act_copy_sel:
+                copy_selected_cells(self.tbl)
+            elif act_copy_uid is not None and chosen == act_copy_uid:
+                _copy_text_to_clipboard(uid)
+            elif act_copy_met is not None and chosen == act_copy_met:
+                _copy_text_to_clipboard(met_uid)
+            elif act_open_asset is not None and chosen == act_open_asset:
+                self._open_asset()
+            elif act_open_met_details is not None and chosen == act_open_met_details:
+                self._open_metrology_details()
+            elif act_open_met_list is not None and chosen == act_open_met_list:
+                self._open_metrology_list()
+        except Exception:
+            pass
+
+# (FILENAME: ui/metrology_dashboard_page.py - END)  # Part 2/2

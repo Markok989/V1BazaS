@@ -1,0 +1,655 @@
+{
+  "dash_met_v1": {
+    "order": [
+      "status",
+      "met_uid",
+      "asset_uid",
+      "valid_until",
+      "calib_type",
+      "provider"
+    ],
+    "visible": {
+      "status": true,
+      "met_uid": true,
+      "asset_uid": true,
+      "valid_until": true,
+      "calib_type": true,
+      "provider": true
+    },
+    "widths": {
+      "status": 120,
+      "met_uid": 140,
+      "asset_uid": 160,
+      "valid_until": 140,
+      "calib_type": 140,
+      "provider": 550
+    }
+  },
+  "audit_table_v1": {
+    "order": [
+      "entity",
+      "time",
+      "entity_id",
+      "action",
+      "actor",
+      "source",
+      "before",
+      "after"
+    ],
+    "visible": {
+      "time": true,
+      "entity": true,
+      "entity_id": true,
+      "action": true,
+      "actor": true,
+      "source": true,
+      "before": true,
+      "after": true
+    },
+    "widths": {
+      "time": 96,
+      "entity": 73,
+      "entity_id": 96,
+      "action": 117,
+      "actor": 54,
+      "source": 174,
+      "before": 216,
+      "after": 477
+    }
+  },
+  "users_table_v1": {
+    "order": [
+      "rb",
+      "is_active",
+      "username",
+      "last_name",
+      "father_name",
+      "first_name",
+      "display_name",
+      "sector",
+      "location",
+      "title",
+      "primary_role",
+      "roles",
+      "jmbg",
+      "email",
+      "phone",
+      "created_at",
+      "updated_at",
+      "login",
+      "must_change_creds"
+    ],
+    "visible": {
+      "rb": true,
+      "is_active": true,
+      "username": true,
+      "last_name": true,
+      "father_name": true,
+      "first_name": true,
+      "display_name": true,
+      "sector": true,
+      "location": true,
+      "title": true,
+      "primary_role": true,
+      "roles": true,
+      "jmbg": true,
+      "email": true,
+      "phone": true,
+      "created_at": true,
+      "updated_at": true,
+      "login": true,
+      "must_change_creds": true
+    },
+    "widths": {
+      "rb": 73,
+      "is_active": 101,
+      "username": 114,
+      "last_name": 103,
+      "father_name": 81,
+      "first_name": 85,
+      "display_name": 132,
+      "sector": 73,
+      "location": 82,
+      "title": 150,
+      "primary_role": 140,
+      "roles": 200,
+      "jmbg": 140,
+      "email": 200,
+      "phone": 140,
+      "created_at": 131,
+      "updated_at": 112,
+      "login": 110,
+      "must_change_creds": 140
+    }
+  },
+  "assets_table_v1": {
+    "order": [
+      "rownum",
+      "asset_uid",
+      "toc_number",
+      "serial_number",
+      "name",
+      "category",
+      "status",
+      "current_holder",
+      "location",
+      "updated_at"
+    ],
+    "visible": {
+      "rownum": true,
+      "asset_uid": true,
+      "toc_number": true,
+      "serial_number": true,
+      "name": true,
+      "category": true,
+      "status": true,
+      "current_holder": true,
+      "location": true,
+      "updated_at": true
+    },
+    "widths": {
+      "rownum": 44,
+      "asset_uid": 160,
+      "toc_number": 120,
+      "serial_number": 140,
+      "name": 120,
+      "category": 140,
+      "status": 120,
+      "current_holder": 160,
+      "location": 160,
+      "updated_at": 150
+    }
+  },
+  "metrology_table_v1": {
+    "order": [
+      "met_uid",
+      "status",
+      "asset_uid",
+      "calib_type",
+      "calib_date",
+      "valid_until",
+      "provider_name",
+      "cert_no",
+      "updated_at"
+    ],
+    "visible": {
+      "status": true,
+      "met_uid": true,
+      "asset_uid": true,
+      "calib_type": true,
+      "calib_date": true,
+      "valid_until": true,
+      "provider_name": true,
+      "cert_no": true,
+      "updated_at": true
+    },
+    "widths": {
+      "status": 51,
+      "met_uid": 152,
+      "asset_uid": 96,
+      "calib_type": 100,
+      "calib_date": 64,
+      "valid_until": 64,
+      "provider_name": 79,
+      "cert_no": 61,
+      "updated_at": 588
+    }
+  },
+  "dash_overdue_v1": {
+    "order": [
+      "asset_uid",
+      "asset_name",
+      "holder",
+      "date",
+      "location"
+    ],
+    "visible": {
+      "asset_uid": true,
+      "asset_name": true,
+      "holder": true,
+      "date": true,
+      "location": true
+    },
+    "widths": {
+      "asset_uid": 106,
+      "asset_name": 240,
+      "holder": 160,
+      "date": 150,
+      "location": 160
+    }
+  },
+  "dash_recent_v1": {
+    "order": [
+      "uid",
+      "time",
+      "name",
+      "action",
+      "from",
+      "to"
+    ],
+    "visible": {
+      "time": true,
+      "uid": true,
+      "name": true,
+      "action": true,
+      "from": true,
+      "to": true
+    },
+    "widths": {
+      "time": 160,
+      "uid": 160,
+      "name": 220,
+      "action": 120,
+      "from": 160,
+      "to": 160
+    }
+  },
+  "users_table_v2": {
+    "order": [
+      "username",
+      "display_name",
+      "role",
+      "sector",
+      "roles_all",
+      "is_active",
+      "login_method",
+      "has_pin",
+      "has_password",
+      "created_at",
+      "updated_at",
+      "id"
+    ],
+    "visible": {
+      "username": true,
+      "display_name": true,
+      "role": true,
+      "sector": true,
+      "roles_all": true,
+      "is_active": true,
+      "login_method": true,
+      "has_pin": true,
+      "has_password": true,
+      "created_at": true,
+      "updated_at": true,
+      "id": true
+    },
+    "widths": {
+      "username": 160,
+      "display_name": 220,
+      "role": 140,
+      "sector": 140,
+      "roles_all": 341,
+      "is_active": 90,
+      "login_method": 130,
+      "has_pin": 70,
+      "has_password": 90,
+      "created_at": 160,
+      "updated_at": 160,
+      "id": 80
+    }
+  },
+  "metrology_table_v2": {
+    "order": [
+      "status",
+      "asset_uid",
+      "met_uid",
+      "asset_name",
+      "asset_category",
+      "asset_toc",
+      "asset_sn",
+      "asset_holder",
+      "asset_loc",
+      "calib_type",
+      "calib_date",
+      "valid_until",
+      "provider_name",
+      "cert_no",
+      "updated_at"
+    ],
+    "visible": {
+      "status": true,
+      "met_uid": true,
+      "asset_uid": true,
+      "asset_name": true,
+      "asset_category": true,
+      "asset_toc": true,
+      "asset_sn": true,
+      "asset_holder": true,
+      "asset_loc": true,
+      "calib_type": true,
+      "calib_date": true,
+      "valid_until": true,
+      "provider_name": true,
+      "cert_no": true,
+      "updated_at": true
+    },
+    "widths": {
+      "status": 51,
+      "met_uid": 150,
+      "asset_uid": 96,
+      "asset_name": 260,
+      "asset_category": 150,
+      "asset_toc": 110,
+      "asset_sn": 150,
+      "asset_holder": 160,
+      "asset_loc": 170,
+      "calib_type": 140,
+      "calib_date": 120,
+      "valid_until": 120,
+      "provider_name": 200,
+      "cert_no": 160,
+      "updated_at": 150
+    }
+  },
+  "assignments_table_v1": {
+    "order": [
+      "rownum",
+      "time",
+      "uid",
+      "name",
+      "action",
+      "from",
+      "to",
+      "loc",
+      "note"
+    ],
+    "visible": {
+      "rownum": true,
+      "time": true,
+      "uid": true,
+      "name": true,
+      "action": true,
+      "from": true,
+      "to": true,
+      "loc": true,
+      "note": true
+    },
+    "widths": {
+      "rownum": 60,
+      "time": 160,
+      "uid": 160,
+      "name": 220,
+      "action": 120,
+      "from": 160,
+      "to": 160,
+      "loc": 160,
+      "note": 240
+    }
+  },
+  "assets_table_v2_rb": {
+    "order": [
+      "rb",
+      "asset_uid",
+      "toc_number",
+      "serial_number",
+      "name",
+      "category",
+      "status",
+      "current_holder",
+      "location",
+      "updated_at"
+    ],
+    "visible": {
+      "rb": true,
+      "asset_uid": true,
+      "toc_number": true,
+      "serial_number": true,
+      "name": true,
+      "category": true,
+      "status": true,
+      "current_holder": true,
+      "location": true,
+      "updated_at": true
+    },
+    "widths": {
+      "rb": 70,
+      "asset_uid": 160,
+      "toc_number": 120,
+      "serial_number": 140,
+      "name": 260,
+      "category": 140,
+      "status": 120,
+      "current_holder": 160,
+      "location": 160,
+      "updated_at": 150
+    }
+  },
+  "assets_table_v2": {
+    "order": [
+      "rownum",
+      "rb",
+      "asset_uid",
+      "toc_number",
+      "serial_number",
+      "name",
+      "category",
+      "status",
+      "current_holder",
+      "location",
+      "updated_at"
+    ],
+    "visible": {
+      "rownum": true,
+      "rb": true,
+      "asset_uid": true,
+      "toc_number": true,
+      "serial_number": true,
+      "name": true,
+      "category": true,
+      "status": true,
+      "current_holder": true,
+      "location": true,
+      "updated_at": true
+    },
+    "widths": {
+      "rownum": 60,
+      "rb": 70,
+      "asset_uid": 160,
+      "toc_number": 120,
+      "serial_number": 140,
+      "name": 260,
+      "category": 140,
+      "status": 120,
+      "current_holder": 160,
+      "location": 160,
+      "updated_at": 150
+    }
+  },
+  "metrology_table_v3": {
+    "order": [
+      "rb",
+      "status",
+      "met_uid",
+      "asset_uid",
+      "asset_name",
+      "asset_category",
+      "asset_toc",
+      "asset_sn",
+      "asset_holder",
+      "asset_loc",
+      "calib_type",
+      "calib_date",
+      "valid_until",
+      "provider_name",
+      "cert_no",
+      "updated_at"
+    ],
+    "visible": {
+      "rb": true,
+      "status": true,
+      "met_uid": true,
+      "asset_uid": true,
+      "asset_name": true,
+      "asset_category": true,
+      "asset_toc": true,
+      "asset_sn": true,
+      "asset_holder": true,
+      "asset_loc": true,
+      "calib_type": true,
+      "calib_date": true,
+      "valid_until": true,
+      "provider_name": true,
+      "cert_no": true,
+      "updated_at": true
+    },
+    "widths": {
+      "rb": 60,
+      "status": 110,
+      "met_uid": 150,
+      "asset_uid": 170,
+      "asset_name": 260,
+      "asset_category": 150,
+      "asset_toc": 110,
+      "asset_sn": 150,
+      "asset_holder": 160,
+      "asset_loc": 170,
+      "calib_type": 140,
+      "calib_date": 120,
+      "valid_until": 120,
+      "provider_name": 200,
+      "cert_no": 160,
+      "updated_at": 150
+    }
+  },
+  "assets_table_v7": {
+    "order": [
+      "rownum",
+      "asset_uid",
+      "toc_number",
+      "nomenclature_no",
+      "serial_number",
+      "name",
+      "category",
+      "status",
+      "current_holder",
+      "location",
+      "updated_at"
+    ],
+    "visible": {
+      "rownum": true,
+      "asset_uid": true,
+      "toc_number": true,
+      "nomenclature_no": true,
+      "serial_number": true,
+      "name": true,
+      "category": true,
+      "status": true,
+      "current_holder": true,
+      "location": true,
+      "updated_at": true
+    },
+    "widths": {
+      "rownum": 60,
+      "asset_uid": 160,
+      "toc_number": 120,
+      "nomenclature_no": 150,
+      "serial_number": 140,
+      "name": 260,
+      "category": 140,
+      "status": 120,
+      "current_holder": 160,
+      "location": 160,
+      "updated_at": 150
+    }
+  },
+  "assets_table_v9": {
+    "order": [
+      "rownum",
+      "asset_uid",
+      "toc_number",
+      "nomenclature_no",
+      "serial_number",
+      "name",
+      "category",
+      "status",
+      "current_holder",
+      "location",
+      "updated_at"
+    ],
+    "visible": {
+      "rownum": true,
+      "asset_uid": true,
+      "toc_number": true,
+      "nomenclature_no": true,
+      "serial_number": true,
+      "name": true,
+      "category": true,
+      "status": true,
+      "current_holder": true,
+      "location": true,
+      "updated_at": true
+    },
+    "widths": {
+      "rownum": 60,
+      "asset_uid": 160,
+      "toc_number": 120,
+      "nomenclature_no": 150,
+      "serial_number": 140,
+      "name": 260,
+      "category": 140,
+      "status": 120,
+      "current_holder": 160,
+      "location": 160,
+      "updated_at": 150
+    }
+  },
+  "metrology_table_v5": {
+    "order": [
+      "rb",
+      "status",
+      "met_uid",
+      "asset_uid",
+      "asset_name",
+      "asset_category",
+      "asset_toc",
+      "asset_nomen",
+      "asset_sn",
+      "asset_holder",
+      "asset_loc",
+      "calib_type",
+      "calib_date",
+      "valid_until",
+      "provider_name",
+      "cert_no",
+      "updated_at"
+    ],
+    "visible": {
+      "rb": true,
+      "status": true,
+      "met_uid": true,
+      "asset_uid": true,
+      "asset_name": true,
+      "asset_category": true,
+      "asset_toc": true,
+      "asset_nomen": true,
+      "asset_sn": true,
+      "asset_holder": true,
+      "asset_loc": true,
+      "calib_type": true,
+      "calib_date": true,
+      "valid_until": true,
+      "provider_name": true,
+      "cert_no": true,
+      "updated_at": true
+    },
+    "widths": {
+      "rb": 60,
+      "status": 110,
+      "met_uid": 228,
+      "asset_uid": 170,
+      "asset_name": 260,
+      "asset_category": 150,
+      "asset_toc": 110,
+      "asset_nomen": 150,
+      "asset_sn": 150,
+      "asset_holder": 160,
+      "asset_loc": 170,
+      "calib_type": 140,
+      "calib_date": 120,
+      "valid_until": 120,
+      "provider_name": 200,
+      "cert_no": 160,
+      "updated_at": 150
+    }
+  }
+}

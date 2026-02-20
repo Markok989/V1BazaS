@@ -1,0 +1,4 @@
+app_root=D:\DEV\AppToc\V1Baza
+created_at=20260201_134859
+file_count=7
+db_file=D:\DEV\AppToc\V1Baza\data\db\bazas2.sqlite

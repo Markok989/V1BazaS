@@ -1,0 +1,37 @@
+{
+  "assets_table_v1": {
+    "order": [
+      "asset_uid",
+      "toc_number",
+      "serial_number",
+      "name",
+      "category",
+      "status",
+      "current_holder",
+      "location",
+      "updated_at"
+    ],
+    "visible": {
+      "asset_uid": true,
+      "toc_number": true,
+      "serial_number": true,
+      "name": true,
+      "category": true,
+      "status": true,
+      "current_holder": true,
+      "location": true,
+      "updated_at": true
+    },
+    "widths": {
+      "asset_uid": 160,
+      "toc_number": 120,
+      "serial_number": 140,
+      "name": 260,
+      "category": 140,
+      "status": 120,
+      "current_holder": 160,
+      "location": 160,
+      "updated_at": 150
+    }
+  }
+}

@@ -1,0 +1,2230 @@
+-----------------------------------------------------------------------------------------------------------
+DY\E ALI NIJE ISPRAVLJENO
+
+# FILENAME: app.py
+# (START PART 1/2)
+# -*- coding: utf-8 -*-
+"""
+BazaS2 (offline) — app.py
+
+V1:
+- Login (PIN/Lozinka izbor)
+- Dashboard
+- Sredstva
+- Zaduženja
+- Audit
+- Metrologija
+- Korisnici (V1)
+- Podešavanja
+
+V2/V3 UX (BASIC_USER profil):
+- 2 strane samo:
+  1) Moj Dashboard (personal scope)
+  2) Moja oprema (lista sredstava koja trenutno duži korisnik)
+  + ✅ Podešavanja (uvek dostupno za sve korisnike)
+
+V1.1+ (METRO UX):
+- REFERENT_METRO dobija poseban "METRO UI" meni:
+  - Metrologija Dashboard
+  - Metrologija
+  - Moj Dashboard
+  - Moja oprema
+  - Podešavanja
+
+V1.3 (Multi-role):
+- user može imati više rola
+- bira aktivnu rolu na login-u (u LoginDialog-u)
+- može da promeni aktivnu rolu u toku sesije (audit logged) -> UI rebuild
+- dugme "Promeni ulogu" se prikazuje samo ako user ima 2+ rola
+- "Moj Dashboard" i "Moja oprema" su povezani (dashboard može da prebaci na moju opremu)
+"""
+
+from __future__ import annotations
+
+import sys
+import traceback
+import logging
+import os
+import threading
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, List
+
+# ===================== PATH BOOTSTRAP (fix "No module named core") =====================
+# Ako se app pokrene iz pogrešnog working directory-ja (double-click, shortcut, itd),
+# importi "core.*" i "ui.*" mogu da puknu. Ovo je minimalno bezbedno rešenje.
+_PROJECT_ROOT = Path(__file__).resolve().parent
+try:
+    pr = str(_PROJECT_ROOT)
+    if pr and pr not in sys.path:
+        sys.path.insert(0, pr)
+except Exception:
+    pass
+
+from core.config import APP_NAME, APP_VERSION, DB_FILE, WHEELS_DIR, LOGS_DIR, ensure_folders
+from core.logger import setup_logging
+from core.selfcheck import self_check_and_fix
+from core.db import init_db
+from core.backup import apply_pending_full_restore
+
+from core.session import set_current_user, actor_name, can
+
+from core.rbac import (
+    PERM_ASSETS_VIEW, PERM_ASSETS_CREATE,
+    PERM_ASSETS_MY_VIEW,
+    PERM_ASSETS_METRO_VIEW,
+    PERM_ASSIGN_VIEW, PERM_ASSIGN_CREATE,
+    PERM_AUDIT_VIEW,
+    PERM_METRO_VIEW,
+    PERM_USERS_VIEW,
+    PERM_SETTINGS_VIEW,
+)
+
+from services.users_service import ensure_users_schema
+
+from ui.login_dialog import LoginDialog
+from ui.audit_page import AuditPage
+from ui.settings_page import SettingsPage
+from ui.metrology_page import MetrologyPage
+from ui.users_page import UsersPage
+from ui.assets_page import AssetsPage
+from ui.assignments_page import AssignmentsPage
+
+from ui.dashboard_page import DashboardPage
+from ui.my_assets_page import MyAssetsPage
+
+from PySide6.QtWidgets import (  # type: ignore
+    QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
+    QListWidget, QStackedWidget, QPushButton,
+    QDialog, QMessageBox, QComboBox,
+)
+from PySide6.QtCore import Qt  # type: ignore
+
+
+# ===================== GLOBAL CRASH/LOGGING HOOKS (PRO, FAIL-SAFE) =====================
+_HOOKS_INSTALLED = False
+_ORIG_SYS_EXCEPTHOOK = sys.excepthook
+_FAULT_FILE_HANDLE = None  # faulthandler stream (da ne bude GC)
+_QT_MSG_HANDLER_INSTALLED = False
+
+
+def _safe_mkdir(p):
+    try:
+        os.makedirs(p, exist_ok=True)
+    except Exception:
+        pass
+
+
+def _write_crash_report(logger: logging.Logger, title: str, exc_info=None) -> None:
+    """
+    Best-effort "crash bundle" — upisuje jedan fajl da možeš odmah da pošalješ meni.
+    Ne remeti postojeću funkcionalnost, samo dodaje trag.
+    """
+    try:
+        _safe_mkdir(str(LOGS_DIR))
+        fp = LOGS_DIR / "crash_last.txt"
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        pid = os.getpid()
+        th = threading.current_thread().name
+
+        lines = []
+        lines.append(f"[{now}] {title}")
+        lines.append(f"APP={APP_NAME} v={APP_VERSION}")
+        lines.append(f"PID={pid} THREAD={th}")
+        lines.append(f"DB_FILE={DB_FILE}")
+        lines.append("")
+
+        if exc_info:
+            lines.append("EXCEPTION:")
+            lines.append("".join(traceback.format_exception(*exc_info)))
+        else:
+            lines.append("EXCEPTION: (n/a)")
+
+        fp.write_text("\n".join(lines), encoding="utf-8", errors="ignore")
+    except Exception:
+        # nikad ne sme da ruši app
+        try:
+            logger.error("Crash report write failed.", exc_info=True)
+        except Exception:
+            pass
+
+
+def _install_exception_hooks(logger: logging.Logger) -> None:
+    """
+    Pro-level hvatanje:
+    - sys.excepthook (main thread unhandled)
+    - threading.excepthook (bg thread unhandled)
+    - Qt message handler (warning/error)
+    - faulthandler (hard crash / native crash best-effort)
+    """
+    global _HOOKS_INSTALLED, _FAULT_FILE_HANDLE, _QT_MSG_HANDLER_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    _HOOKS_INSTALLED = True
+
+    # --- sys.excepthook ---
+    def _sys_hook(exc_type, exc, tb):
+        try:
+            logger.critical("UNHANDLED EXCEPTION (sys.excepthook)", exc_info=(exc_type, exc, tb))
+        except Exception:
+            pass
+        try:
+            _write_crash_report(logger, "UNHANDLED EXCEPTION (sys.excepthook)", exc_info=(exc_type, exc, tb))
+        except Exception:
+            pass
+        # pozovi original (da ne menjamo standardno ponašanje)
+        try:
+            _ORIG_SYS_EXCEPTHOOK(exc_type, exc, tb)
+        except Exception:
+            pass
+
+    sys.excepthook = _sys_hook
+
+    # --- threading.excepthook (py>=3.8) ---
+    if hasattr(threading, "excepthook"):
+        _orig_thread_hook = threading.excepthook
+
+        def _thread_hook(args):
+            try:
+                logger.critical(
+                    f"UNHANDLED THREAD EXCEPTION (threading.excepthook) thread={getattr(args.thread, 'name', '?')}",
+                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+                )
+            except Exception:
+                pass
+            try:
+                _write_crash_report(
+                    logger,
+                    f"UNHANDLED THREAD EXCEPTION thread={getattr(args.thread, 'name', '?')}",
+                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+                )
+            except Exception:
+                pass
+            try:
+                _orig_thread_hook(args)
+            except Exception:
+                pass
+
+        threading.excepthook = _thread_hook
+
+    # --- Qt message handler (warnings/errors u log) ---
+    if not _QT_MSG_HANDLER_INSTALLED:
+        try:
+            from PySide6.QtCore import QtMsgType, qInstallMessageHandler  # type: ignore
+
+            def _qt_msg_handler(mode, context, message):
+                try:
+                    if mode == QtMsgType.QtDebugMsg:
+                        lvl = logging.DEBUG
+                        tag = "QT_DEBUG"
+                    elif mode == QtMsgType.QtInfoMsg:
+                        lvl = logging.INFO
+                        tag = "QT_INFO"
+                    elif mode == QtMsgType.QtWarningMsg:
+                        lvl = logging.WARNING
+                        tag = "QT_WARN"
+                    elif mode == QtMsgType.QtCriticalMsg:
+                        lvl = logging.ERROR
+                        tag = "QT_CRIT"
+                    elif mode == QtMsgType.QtFatalMsg:
+                        lvl = logging.CRITICAL
+                        tag = "QT_FATAL"
+                    else:
+                        lvl = logging.INFO
+                        tag = "QT"
+
+                    loc = ""
+                    try:
+                        f = getattr(context, "file", "") or ""
+                        line = getattr(context, "line", 0) or 0
+                        fn = getattr(context, "function", "") or ""
+                        if f or fn:
+                            loc = f" ({f}:{line} {fn})"
+                    except Exception:
+                        loc = ""
+
+                    logger.log(lvl, f"{tag}: {message}{loc}")
+                except Exception:
+                    pass
+
+            qInstallMessageHandler(_qt_msg_handler)
+            _QT_MSG_HANDLER_INSTALLED = True
+        except Exception:
+            pass
+
+    # --- faulthandler (native crash trace best-effort) ---
+    try:
+        import faulthandler  # stdlib
+
+        _safe_mkdir(str(LOGS_DIR))
+        fh_path = LOGS_DIR / "faulthandler.log"
+        _FAULT_FILE_HANDLE = open(fh_path, "a", encoding="utf-8", buffering=1)
+        faulthandler.enable(file=_FAULT_FILE_HANDLE, all_threads=True)
+        try:
+            logger.info(f"Faulthandler enabled: {fh_path}")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+# ===================== METRO DASHBOARD IMPORT (FAIL-SAFE) =====================
+_METRO_DASH_IMPORT_ERR: Optional[str] = None
+
+try:
+    from ui.metrology_dashboard_page import MetrologyDashboardPage  # type: ignore
+except Exception as _e:  # pragma: no cover
+    _METRO_DASH_IMPORT_ERR = f"{_e}"
+
+    class MetrologyDashboardPage(QWidget):  # type: ignore
+        """Fallback stub ako pravi dashboard ne može da se importuje."""
+        def __init__(self, logger: logging.Logger, parent=None):
+            super().__init__(parent)
+            self.logger = logger
+            lay = QVBoxLayout(self)
+            t = QLabel("Metrologija Dashboard (nije učitan)")
+            t.setStyleSheet("font-size: 18px; font-weight: 700;")
+            info = QLabel(
+                "Dashboard modul nije mogao da se učita.\n\n"
+                "Najčešći uzrok: ui/metrology_dashboard_page.py ne postoji ili ima grešku.\n\n"
+                f"Detalj: {_METRO_DASH_IMPORT_ERR}"
+            )
+            info.setWordWrap(True)
+            info.setStyleSheet("color: #a00;")
+            lay.addWidget(t)
+            lay.addWidget(info, 1)
+
+        def refresh(self) -> None:
+            return
+
+
+# ======== LOGIN MEMORY (da BASIC/FULL detekcija bude pouzdana) ========
+_LAST_LOGIN_USER: Optional[object] = None  # dict ili objekat (kako LoginDialog vrati)
+
+
+def _remember_login_user(u: Optional[object]) -> None:
+    global _LAST_LOGIN_USER
+    _LAST_LOGIN_USER = u
+
+
+def _uget(u: object, key: str, default=None):
+    """Getter koji radi i za dict i za objekat."""
+    if u is None:
+        return default
+    try:
+        if isinstance(u, dict):
+            return u.get(key, default)
+        return getattr(u, key, default)
+    except Exception:
+        return default
+
+
+def _extract_role_from_user(u: Optional[object]) -> Optional[str]:
+    """Pokušaj da izvučeš efektivnu rolu (prioritet: active_role -> role -> heuristika)."""
+    if u is None:
+        return None
+
+    for k in ("is_admin", "admin", "is_superuser", "superuser"):
+        v = _uget(u, k, None)
+        try:
+            if bool(v):
+                return "ADMIN"
+        except Exception:
+            pass
+
+    for k in ("is_basic", "basic", "is_basic_user"):
+        v = _uget(u, k, None)
+        try:
+            if bool(v):
+                return "BASIC_USER"
+        except Exception:
+            pass
+
+    role_keys = (
+        "active_role",
+        "role", "rbac_role", "user_role", "profile", "user_type", "type",
+        "perm_profile", "permission_profile", "access_profile", "ui_mode", "mode",
+    )
+    for k in role_keys:
+        v = _uget(u, k, None)
+        if not v:
+            continue
+        try:
+            if isinstance(v, dict):
+                for kk in ("name", "code", "role", "profile", "id"):
+                    vv = v.get(kk)
+                    if vv:
+                        return str(vv)
+                continue
+            return str(v)
+        except Exception:
+            continue
+
+    return None
+
+
+def _extract_username_like(u: Optional[object]) -> Optional[str]:
+    if u is None:
+        return None
+    keys = ("username", "login", "user", "email", "account", "name", "full_name", "display_name")
+    for k in keys:
+        v = _uget(u, k, None)
+        if v:
+            try:
+                return str(v)
+            except Exception:
+                pass
+    return None
+
+
+def show_fatal_message(title: str, message: str) -> None:
+    try:
+        from PySide6.QtWidgets import QApplication as _QApp, QMessageBox as _QMsg  # type: ignore
+        _app = _QApp.instance() or _QApp(sys.argv)
+        _QMsg.critical(None, title, message)
+    except Exception:
+        print(f"[FATAL] {title}\n{message}", file=sys.stderr)
+
+
+def _actor_name() -> str:
+    return actor_name()
+
+
+def _current_role_safe() -> str:
+    """Aktivna rola iz session-a (fail-safe)."""
+    try:
+        from core.session import current_role  # type: ignore
+        return str(current_role() or "").strip()
+    except Exception:
+        return ""
+
+
+def _list_roles_safe() -> List[str]:
+    """Lista rola iz session-a (fail-safe)."""
+    try:
+        from core.session import list_user_roles  # type: ignore
+        rr = list_user_roles()
+        out: List[str] = []
+        seen = set()
+        for x in rr:
+            s = str(x or "").strip().upper()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+        return out
+    except Exception:
+        return []
+
+
+def _set_active_role_safe(new_role: str, source: str = "ui_mainwindow_role_switch") -> bool:
+    """Set active role (audit best-effort) + fail-safe bool."""
+    try:
+        from core.session import set_active_role  # type: ignore
+        set_active_role(str(new_role or "").strip(), source=source, audit=True)
+        return True
+    except Exception:
+        return False
+
+
+def _sync_last_login_user_from_session() -> None:
+    """_LAST_LOGIN_USER mora da prati session user (login + role switch)."""
+    global _LAST_LOGIN_USER
+    try:
+        from core.session import get_current_user  # type: ignore
+        su = get_current_user() or {}
+        if not su:
+            return
+
+        if isinstance(_LAST_LOGIN_USER, dict):
+            try:
+                _LAST_LOGIN_USER.update(dict(su))
+            except Exception:
+                _LAST_LOGIN_USER = dict(su)
+        else:
+            _LAST_LOGIN_USER = dict(su)
+    except Exception:
+        pass
+
+
+def detect_ui_mode_from_session() -> str:
+    """Vraća: METRO | BASIC | FULL"""
+    cur = (_current_role_safe() or "").strip().upper()
+    if not cur:
+        cur = (_extract_role_from_user(_LAST_LOGIN_USER) or "").strip().upper()
+
+    if cur in {"REFERENT_METRO", "REFERENT_METROLOGIJE", "METRO_REFERENT"}:
+        return "METRO"
+
+    BASIC_NAMES = {
+        "BASIC", "BASIC_USER", "USER", "EMPLOYEE", "KORISNIK", "OBICAN", "OBICAN_KORISNIK",
+        "READONLY", "READ_ONLY", "VIEWONLY", "VIEW_ONLY",
+    }
+    FULL_NAMES = {
+        "ADMIN", "SUPERUSER",
+        "SECTOR_ADMIN",
+        "REFERENT_IT", "NACELNIK", "NAČELNIK", "MANAGER", "FULL",
+    }
+
+    if cur:
+        if cur in BASIC_NAMES:
+            return "BASIC"
+        if cur in FULL_NAMES:
+            return "FULL"
+
+    def _safe_can(perm: str) -> bool:
+        try:
+            return bool(can(perm))
+        except Exception:
+            return False
+
+    full_signals = [
+        _safe_can(PERM_USERS_VIEW),
+        _safe_can(PERM_ASSETS_CREATE),
+        _safe_can(PERM_ASSIGN_CREATE),
+        _safe_can(PERM_AUDIT_VIEW),
+    ]
+    if any(full_signals):
+        return "FULL"
+
+    return "BASIC"
+
+
+class RoleSwitchDialog(QDialog):
+    """Mali dijalog za izbor aktivne role u toku sesije."""
+    def __init__(self, roles: List[str], current: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Promena uloge")
+        self.resize(380, 160)
+
+        self._roles = [str(r or "").strip().upper() for r in (roles or []) if str(r or "").strip()]
+        if not self._roles:
+            self._roles = [str(current or "READONLY").strip().upper()]
+
+        self.cb = QComboBox()
+        for r in self._roles:
+            self.cb.addItem(r, r)
+
+        cur = str(current or "").strip().upper()
+        if cur:
+            idx = self.cb.findText(cur, Qt.MatchFixedString)
+            if idx >= 0:
+                self.cb.setCurrentIndex(idx)
+
+        self.btn_ok = QPushButton("Primeni")
+        self.btn_cancel = QPushButton("Otkaži")
+        self.btn_ok.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("Izaberi aktivnu ulogu za ovu sesiju:"))
+        lay.addWidget(self.cb)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self.btn_ok)
+        row.addWidget(self.btn_cancel)
+        lay.addLayout(row)
+
+    def selected_role(self) -> str:
+        return str(self.cb.currentData() or self.cb.currentText() or "").strip().upper()
+
+
+def _apply_global_theme(app: QApplication, logger: logging.Logger) -> None:
+    """
+    Jedno mesto za theme apply.
+    Ne ruši app ako theme modul ne postoji ili je nepotpun.
+    """
+    try:
+        from ui.theme.theme_manager import apply_saved_theme as apply_theme_from_settings  # type: ignore
+        apply_theme_from_settings(app)
+        try:
+            logger.info("Theme applied (saved theme).")
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            logger.warning(f"Theme apply skipped: {e}")
+        except Exception:
+            pass
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, logger: logging.Logger):
+        super().__init__()
+        self.logger = logger
+        self.setWindowTitle(f"{APP_NAME} — {APP_VERSION}")
+        self.resize(1200, 720)
+
+        central = QWidget()
+        root = QHBoxLayout(central)
+
+        self.nav = QListWidget()
+        self.nav.setFixedWidth(220)
+
+        self.pages = QStackedWidget()
+
+        root.addWidget(self.nav)
+        root.addWidget(self.pages, 1)
+        self.setCentralWidget(central)
+
+        self.statusBar().showMessage(f"DB: {DB_FILE} | Offline: ON | User: {_actor_name()}")
+
+        self.lb_role = QLabel("")
+        self.lb_role.setToolTip("Aktivna uloga (multi-role)")
+        self.statusBar().addPermanentWidget(self.lb_role)
+
+        self.btn_switch_role = QPushButton("Promeni ulogu")
+        self.btn_switch_role.setToolTip("Promeni aktivnu ulogu za ovu sesiju (audit log)")
+        self.statusBar().addPermanentWidget(self.btn_switch_role)
+        self.btn_switch_role.clicked.connect(self._on_switch_role_clicked)
+
+        self.btn_logout = QPushButton("Odjava")
+        self.btn_logout.setToolTip("Odjavi se i prijavi drugog korisnika")
+        self.statusBar().addPermanentWidget(self.btn_logout)
+        self.btn_logout.clicked.connect(self._logout)
+
+        self.nav.currentRowChanged.connect(self._on_nav_row_changed)
+
+        self._rebuild_ui_by_profile()
+        self._refresh_role_widgets()
+
+    def _safe_can(self, perm: str) -> bool:
+        try:
+            return bool(can(perm))
+        except Exception:
+            return False
+
+    def _ui_mode_reason(self) -> str:
+        u = _LAST_LOGIN_USER
+        role = (_extract_role_from_user(u) or "").strip().upper()
+        uname = (_extract_username_like(u) or "").strip()
+        return (
+            f"role={role or '—'}; user={uname or '—'}; "
+            f"users_view={int(self._safe_can(PERM_USERS_VIEW))}; "
+            f"settings_view={int(self._safe_can(PERM_SETTINGS_VIEW))}; "
+            f"assets_create={int(self._safe_can(PERM_ASSETS_CREATE))}; "
+            f"assign_create={int(self._safe_can(PERM_ASSIGN_CREATE))}"
+        )
+
+    def _refresh_role_widgets(self) -> None:
+        roles = _list_roles_safe()
+        cur = _current_role_safe().strip().upper() or (_extract_role_from_user(_LAST_LOGIN_USER) or "").strip().upper()
+        if not cur:
+            cur = "READONLY"
+
+        try:
+            self.lb_role.setText(f"Uloga: {cur}")
+        except Exception:
+            pass
+
+        try:
+            self.btn_switch_role.setVisible(bool(len(roles) >= 2))
+            self.btn_switch_role.setEnabled(bool(len(roles) >= 2))
+        except Exception:
+            pass
+
+    def _on_switch_role_clicked(self) -> None:
+        roles = _list_roles_safe()
+        if len(roles) < 2:
+            QMessageBox.information(self, "Info", "Ovaj korisnik nema više rola.")
+            return
+
+        cur = _current_role_safe().strip().upper()
+        dlg = RoleSwitchDialog(roles=roles, current=cur, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        new_role = dlg.selected_role()
+        if not new_role or new_role == cur:
+            return
+        if new_role not in roles:
+            QMessageBox.warning(self, "Greška", "Izabrana uloga nije dodeljena ovom korisniku.")
+            return
+
+        if not _set_active_role_safe(new_role, source="ui_mainwindow_role_switch"):
+            QMessageBox.warning(self, "Greška", "Ne mogu da promenim ulogu (role switch failed).")
+            return
+
+        _sync_last_login_user_from_session()
+        self._on_user_changed()
+        self._refresh_role_widgets()
+
+    def _nav_go_by_text(self, label: str) -> None:
+        try:
+            target = (label or "").strip()
+            if not target:
+                return
+            for i in range(self.nav.count()):
+                it = self.nav.item(i)
+                if it is None:
+                    continue
+                if (it.text() or "").strip() == target:
+                    if not (it.flags() & Qt.ItemIsEnabled):
+                        return
+                    self.nav.setCurrentRow(i)
+                    return
+        except Exception:
+            pass
+
+    def _is_metro_referent(self) -> bool:
+        cur = (_current_role_safe() or "").strip().upper()
+        if not cur:
+            cur = (_extract_role_from_user(_LAST_LOGIN_USER) or "").strip().upper()
+        return cur in {"REFERENT_METRO", "REFERENT_METROLOGIJE", "METRO_REFERENT"}
+
+    def _is_basic_user(self) -> bool:
+        cur = (_current_role_safe() or "").strip().upper()
+        if not cur:
+            cur = (_extract_role_from_user(_LAST_LOGIN_USER) or "").strip().upper()
+
+        BASIC_NAMES = {
+            "BASIC", "BASIC_USER", "USER", "EMPLOYEE", "KORISNIK", "OBICAN", "OBICAN_KORISNIK",
+            "READONLY", "READ_ONLY", "VIEWONLY", "VIEW_ONLY",
+        }
+        FULL_NAMES = {
+            "ADMIN", "SUPERUSER",
+            "SECTOR_ADMIN",
+            "REFERENT_IT", "NACELNIK", "NAČELNIK", "MANAGER", "FULL",
+        }
+
+        if cur:
+            if cur in BASIC_NAMES:
+                return True
+            if cur in FULL_NAMES:
+                return False
+
+        full_signals = [
+            self._safe_can(PERM_USERS_VIEW),
+            self._safe_can(PERM_ASSETS_CREATE),
+            self._safe_can(PERM_ASSIGN_CREATE),
+            self._safe_can(PERM_AUDIT_VIEW),
+        ]
+        if any(full_signals):
+            return False
+
+        return True
+
+    def _reset_page_refs(self) -> None:
+        page_attrs = [
+            "page_dashboard",
+            "page_assets",
+            "page_assignments",
+            "page_audit",
+            "page_metrology",
+            "page_users",
+            "page_settings",
+            "page_my_dashboard",
+            "page_my_assets",
+            "page_metro_dashboard",
+        ]
+        for a in page_attrs:
+            if hasattr(self, a):
+                try:
+                    delattr(self, a)
+                except Exception:
+                    try:
+                        setattr(self, a, None)
+                    except Exception:
+                        pass
+
+    def _clear_pages(self) -> None:
+        try:
+            while self.pages.count() > 0:
+                w = self.pages.widget(0)
+                self.pages.removeWidget(w)
+                try:
+                    w.setParent(None)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        self._reset_page_refs()
+
+    def _rebuild_ui_by_profile(self) -> None:
+        _sync_last_login_user_from_session()
+        reason = self._ui_mode_reason()
+
+        # VAŽNO: uvek vrati blockSignals stanje (da nav ne ostane "mrtav" ako se desi exception)
+        self.nav.blockSignals(True)
+        try:
+            try:
+                self.nav.clear()
+            except Exception:
+                pass
+            self._clear_pages()
+
+            # ===== METRO UI =====
+            if self._is_metro_referent():
+                self.nav.addItems([
+                    "Metrologija Dashboard",
+                    "Metrologija",
+                    "Moj Dashboard",
+                    "Moja oprema",
+                    "Podešavanja",
+                ])
+
+                self.page_metro_dashboard = MetrologyDashboardPage(self.logger)
+                self.page_metrology = MetrologyPage(self.logger)
+
+                self.page_my_dashboard = DashboardPage(
+                    self.logger,
+                    scope_mode="my",
+                    on_go_assets=lambda: self._nav_go_by_text("Moja oprema"),
+                )
+                self.page_my_assets = MyAssetsPage(self.logger)
+                self.page_settings = SettingsPage(self.logger)
+
+                self.pages.addWidget(self.page_metro_dashboard)  # 0
+                self.pages.addWidget(self.page_metrology)        # 1
+                self.pages.addWidget(self.page_my_dashboard)     # 2
+                self.pages.addWidget(self.page_my_assets)        # 3
+                self.pages.addWidget(self.page_settings)         # 4
+
+                self.nav.setCurrentRow(0)
+                self.pages.setCurrentIndex(0)
+
+                try:
+                    self.statusBar().showMessage(
+                        f"DB: {DB_FILE} | Offline: ON | User: {_actor_name()} | Mode: METRO | {reason}"
+                    )
+                except Exception:
+                    pass
+
+                self._refresh_role_widgets()
+                return
+
+            # ===== BASIC / FULL =====
+            is_basic = self._is_basic_user()
+
+            if is_basic:
+                self.nav.addItems(["Moj Dashboard", "Moja oprema", "Podešavanja"])
+
+                self.page_dashboard = DashboardPage(
+                    self.logger,
+                    scope_mode="my",
+                    on_go_assets=lambda: self._nav_go_by_text("Moja oprema"),
+                )
+                self.page_my_assets = MyAssetsPage(self.logger)
+                self.page_settings = SettingsPage(self.logger)
+
+                self.pages.addWidget(self.page_dashboard)   # 0
+                self.pages.addWidget(self.page_my_assets)   # 1
+                self.pages.addWidget(self.page_settings)    # 2
+
+                self.nav.setCurrentRow(0)
+                self.pages.setCurrentIndex(0)
+
+                try:
+                    self.statusBar().showMessage(
+                        f"DB: {DB_FILE} | Offline: ON | User: {_actor_name()} | Mode: BASIC | {reason}"
+                    )
+                except Exception:
+                    pass
+
+            else:
+                self.nav.addItems([
+                    "Dashboard",
+                    "Sredstva",
+                    "Zaduženja",
+                    "Audit",
+                    "Metrologija",
+                    "Korisnici",
+                    "Podešavanja",
+                    "Moj Dashboard",
+                    "Moja oprema",
+                ])
+
+                self.page_dashboard = DashboardPage(
+                    self.logger,
+                    on_go_assets=lambda: self._nav_go_by_text("Sredstva"),
+                    on_go_assign=lambda: self._nav_go_by_text("Zaduženja"),
+                    scope_mode="global",
+                )
+                self.page_assets = AssetsPage(self.logger)
+                self.page_assignments = AssignmentsPage(self.logger, self.page_assets)
+                self.page_audit = AuditPage(self.logger)
+                self.page_metrology = MetrologyPage(self.logger)
+                self.page_users = UsersPage(self.logger)
+                self.page_settings = SettingsPage(self.logger)
+
+                self.page_my_dashboard = DashboardPage(
+                    self.logger,
+                    scope_mode="my",
+                    on_go_assets=lambda: self._nav_go_by_text("Moja oprema"),
+                )
+                self.page_my_assets = MyAssetsPage(self.logger)
+
+                self.pages.addWidget(self.page_dashboard)      # 0
+                self.pages.addWidget(self.page_assets)         # 1
+                self.pages.addWidget(self.page_assignments)    # 2
+                self.pages.addWidget(self.page_audit)          # 3
+                self.pages.addWidget(self.page_metrology)      # 4
+                self.pages.addWidget(self.page_users)          # 5
+                self.pages.addWidget(self.page_settings)       # 6
+                self.pages.addWidget(self.page_my_dashboard)   # 7
+                self.pages.addWidget(self.page_my_assets)      # 8
+
+                self._apply_nav_rbac()
+
+                self.nav.setCurrentRow(0)
+                self.pages.setCurrentIndex(0)
+
+                try:
+                    self.statusBar().showMessage(
+                        f"DB: {DB_FILE} | Offline: ON | User: {_actor_name()} | Mode: FULL | {reason}"
+                    )
+                except Exception:
+                    pass
+
+            self._refresh_role_widgets()
+
+        finally:
+            self.nav.blockSignals(False)
+
+# (END PART 1/2)
+
+# FILENAME: app.py
+# (START PART 2/2)
+
+    def _logout(self) -> None:
+        if QMessageBox.question(
+            self,
+            "Odjava",
+            "Odjavi se i vrati na prijavu?",
+            QMessageBox.Yes | QMessageBox.No
+        ) != QMessageBox.Yes:
+            return
+
+        old_u = None
+        try:
+            from core.session import get_current_user  # type: ignore
+            old_u = get_current_user()
+        except Exception:
+            old_u = None
+
+        try:
+            set_current_user(None)  # type: ignore[arg-type]
+        except Exception:
+            try:
+                set_current_user({})  # type: ignore[arg-type]
+            except Exception:
+                pass
+
+        dlg = LoginDialog(self, logger=self.logger)
+        if dlg.exec() != QDialog.Accepted:
+            try:
+                if old_u:
+                    set_current_user(old_u)
+            except Exception:
+                pass
+            _sync_last_login_user_from_session()
+            self._on_user_changed()
+            return
+
+        u = dlg.selected_user()
+        if not u:
+            try:
+                if old_u:
+                    set_current_user(old_u)
+            except Exception:
+                pass
+            _sync_last_login_user_from_session()
+            self._on_user_changed()
+            return
+
+        _remember_login_user(u)
+        set_current_user(u)
+        _sync_last_login_user_from_session()
+        self._on_user_changed()
+
+    def _on_user_changed(self) -> None:
+        try:
+            self._rebuild_ui_by_profile()
+        except Exception:
+            pass
+
+        self._refresh_role_widgets()
+
+        if hasattr(self, "page_dashboard") and getattr(self, "page_dashboard", None):
+            try:
+                self.page_dashboard.refresh()
+            except Exception:
+                pass
+
+        if hasattr(self, "page_my_dashboard") and getattr(self, "page_my_dashboard", None):
+            try:
+                self.page_my_dashboard.refresh()
+            except Exception:
+                pass
+
+        if hasattr(self, "page_metro_dashboard") and getattr(self, "page_metro_dashboard", None):
+            try:
+                getattr(self.page_metro_dashboard, "refresh", lambda: None)()
+            except Exception:
+                pass
+
+        if hasattr(self, "page_metrology") and getattr(self, "page_metrology", None):
+            try:
+                self.page_metrology.load(show_errors=False)
+            except Exception:
+                pass
+
+        if hasattr(self, "page_my_assets") and getattr(self, "page_my_assets", None):
+            try:
+                self.page_my_assets.refresh()
+            except Exception:
+                try:
+                    self.page_my_assets.load_assets()
+                except Exception:
+                    pass
+
+        if hasattr(self, "page_assets") and getattr(self, "page_assets", None) and self._safe_can(PERM_ASSETS_VIEW):
+            try:
+                self.page_assets.load_assets()
+            except Exception:
+                pass
+
+        if hasattr(self, "page_assignments") and getattr(self, "page_assignments", None) and self._safe_can(PERM_ASSIGN_VIEW):
+            try:
+                self.page_assignments.load_assignments()
+            except Exception:
+                pass
+
+        if hasattr(self, "page_users") and getattr(self, "page_users", None) and self._safe_can(PERM_USERS_VIEW):
+            try:
+                self.page_users.reload()
+            except Exception:
+                pass
+
+        if hasattr(self, "page_settings") and getattr(self, "page_settings", None):
+            try:
+                getattr(self.page_settings, "refresh", lambda: None)()
+            except Exception:
+                pass
+
+    def _on_nav_row_changed(self, row: int) -> None:
+        try:
+            # dodatni airbag: nav index mora da postoji i u pages
+            if row < 0 or row >= self.pages.count():
+                return
+
+            it = self.nav.item(row)
+            if it is None:
+                self.pages.setCurrentIndex(row)
+                return
+
+            if not (it.flags() & Qt.ItemIsEnabled):
+                for i in range(self.nav.count()):
+                    it2 = self.nav.item(i)
+                    if it2 is not None and (it2.flags() & Qt.ItemIsEnabled):
+                        if i < self.pages.count():
+                            self.nav.blockSignals(True)
+                            self.nav.setCurrentRow(i)
+                            self.nav.blockSignals(False)
+                            self.pages.setCurrentIndex(i)
+                        return
+                return
+
+            label = (it.text() or "").strip()
+
+            if label == "Sredstva":
+                if self._safe_can(PERM_ASSETS_VIEW):
+                    self.pages.setCurrentIndex(row)
+                    return
+
+                if self._safe_can(PERM_ASSETS_MY_VIEW):
+                    self._nav_go_by_text("Moja oprema")
+                    return
+
+                if self._safe_can(PERM_ASSETS_METRO_VIEW) or self._safe_can(PERM_METRO_VIEW):
+                    self._nav_go_by_text("Metrologija")
+                    return
+
+                for i in range(self.nav.count()):
+                    it2 = self.nav.item(i)
+                    if it2 is not None and (it2.flags() & Qt.ItemIsEnabled):
+                        if i < self.pages.count():
+                            self.nav.blockSignals(True)
+                            self.nav.setCurrentRow(i)
+                            self.nav.blockSignals(False)
+                            self.pages.setCurrentIndex(i)
+                        return
+                return
+
+            self.pages.setCurrentIndex(row)
+
+        except Exception:
+            try:
+                if 0 <= row < self.pages.count():
+                    self.pages.setCurrentIndex(row)
+            except Exception:
+                pass
+
+    def _apply_nav_rbac(self) -> None:
+        def assets_any_view() -> bool:
+            return bool(
+                self._safe_can(PERM_ASSETS_VIEW)
+                or self._safe_can(PERM_ASSETS_MY_VIEW)
+                or self._safe_can(PERM_ASSETS_METRO_VIEW)
+            )
+
+        items = [
+            (0, "Dashboard", None),
+            (1, "Sredstva", "__ASSETS_ANY_VIEW__"),
+            (2, "Zaduženja", PERM_ASSIGN_VIEW),
+            (3, "Audit", PERM_AUDIT_VIEW),
+            (4, "Metrologija", PERM_METRO_VIEW),
+            (5, "Korisnici", PERM_USERS_VIEW),
+            (6, "Podešavanja", PERM_SETTINGS_VIEW),
+            (7, "Moj Dashboard", None),
+            (8, "Moja oprema", None),
+        ]
+
+        for idx, _, perm in items:
+            it = self.nav.item(idx)
+            if it is None:
+                continue
+
+            if not perm:
+                it.setFlags(it.flags() | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                continue
+
+            ok = assets_any_view() if perm == "__ASSETS_ANY_VIEW__" else self._safe_can(perm)
+
+            if ok:
+                it.setFlags(it.flags() | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            else:
+                it.setFlags(it.flags() & ~(Qt.ItemIsEnabled | Qt.ItemIsSelectable))
+
+        try:
+            cur = self.nav.currentRow()
+            it = self.nav.item(cur) if cur >= 0 else None
+            if it is not None and not (it.flags() & Qt.ItemIsEnabled):
+                for i in range(self.nav.count()):
+                    it2 = self.nav.item(i)
+                    if it2 is not None and (it2.flags() & Qt.ItemIsEnabled):
+                        if i < self.pages.count():
+                            self.nav.blockSignals(True)
+                            self.nav.setCurrentRow(i)
+                            self.nav.blockSignals(False)
+                            self.pages.setCurrentIndex(i)
+                        break
+        except Exception:
+            pass
+
+
+def start_ui(logger: logging.Logger) -> None:
+    app = QApplication(sys.argv)
+
+    # malo “pro” metapodataka (ne menja logiku)
+    try:
+        QApplication.setApplicationName(APP_NAME)
+        QApplication.setApplicationDisplayName(APP_NAME)
+        QApplication.setOrganizationName("BazaS2")
+    except Exception:
+        pass
+
+    # ✅ pro hooks (ne menjaju UI logiku; samo hvataju crash/warn)
+    try:
+        _install_exception_hooks(logger)
+    except Exception:
+        pass
+
+    # ✅ GLOBAL THEME APPLY (offline)
+    _apply_global_theme(app, logger)
+
+    ensure_users_schema()
+
+    dlg = LoginDialog(None, logger=logger)
+    if dlg.exec() != QDialog.Accepted:
+        sys.exit(0)
+
+    u = dlg.selected_user()
+    if not u:
+        sys.exit(0)
+
+    _remember_login_user(u)
+    set_current_user(u)
+    _sync_last_login_user_from_session()
+
+    win = MainWindow(logger)
+    win.show()
+
+    try:
+        sys.exit(app.exec())
+    except Exception as e:
+        tb = traceback.format_exc()
+        try:
+            logger.critical(f"FATAL UI LOOP ERROR: {e}")
+            logger.critical(tb)
+        except Exception:
+            pass
+        try:
+            _write_crash_report(logger, "FATAL UI LOOP ERROR", exc_info=sys.exc_info())
+        except Exception:
+            pass
+        show_fatal_message("BazaS2 — Fatal UI error", f"{e}\n\n{tb}")
+        raise
+
+
+def main() -> int:
+    logger = setup_logging()
+    logger.info("Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).")
+
+    # ✅ instaliraj hook-ove što ranije
+    try:
+        _install_exception_hooks(logger)
+    except Exception:
+        pass
+
+    try:
+        ensure_folders()
+
+        did_apply, ok_restore, msg_restore = apply_pending_full_restore()
+        if did_apply:
+            if ok_restore:
+                logger.info(msg_restore)
+            else:
+                logger.error(msg_restore)
+                show_fatal_message("BazaS2 — FULL Restore failed", msg_restore)
+                return 4
+
+        args = sys.argv[1:]
+        selfcheck_only = ("--self-check-only" in args)
+        no_autofix = ("--no-autofix" in args)
+
+        ok = self_check_and_fix(logger, auto_fix=(not no_autofix))
+        if not ok:
+            msg = (
+                "Self-check nije prošao.\n\n"
+                "Rešenje (offline): ubaci odgovarajuće .whl pakete u:\n"
+                f"  {WHEELS_DIR}\n\n"
+                "Detalji: data/logs/selfcheck_report.json i data/logs/pip_install_last.txt"
+            )
+            logger.error(msg)
+            show_fatal_message("BazaS2 — Missing dependencies", msg)
+            return 2
+
+        if selfcheck_only:
+            logger.info("Self-check-only mode: završavam bez pokretanja UI.")
+            return 0
+
+        old_v, latest_v = init_db()
+        logger.info(f"DB init OK. schema_version: {old_v} -> {latest_v}")
+
+        start_ui(logger)
+        return 0
+
+    except Exception as e:
+        tb = traceback.format_exc()
+        try:
+            logger.error(f"FATAL ERROR: {e}")
+            logger.error(tb)
+        except Exception:
+            pass
+        try:
+            _write_crash_report(logger, "FATAL ERROR (main)", exc_info=sys.exc_info())
+        except Exception:
+            pass
+        show_fatal_message("BazaS2 — Fatal error", f"{e}\n\n{tb}")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+# (END PART 2/2)
+------------------------------------------------------------------------------------------------------------------------
+
+
+NOVO ALI KRACE JE 
+
+
+# FILENAME: app.py
+# (FILENAME: app.py - START)  [PART 1/3]
+# -*- coding: utf-8 -*-
+"""
+BazaS2 (offline) — app.py
+
+KRITIČNO:
+- Ne importuj PySide6 / ui.* pre dependency provere.
+- Ako PySide6 fali, UI ne može da se podigne.
+
+Dodato:
+- Preflight check MUST deps (PySide6) + pitanje korisniku (CLI) za offline install iz WHEELS_DIR
+- Kompatibilnost: self_check_and_fix može imati različit potpis u tvojoj bazi koda
+"""
+
+from __future__ import annotations
+
+import sys
+import os
+import traceback
+import logging
+import threading
+import subprocess
+import importlib.util
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, List, Dict, Tuple, Any
+
+# ===================== PATH BOOTSTRAP (fix "No module named core") =====================
+_PROJECT_ROOT = Path(__file__).resolve().parent
+try:
+    pr = str(_PROJECT_ROOT)
+    if pr and pr not in sys.path:
+        sys.path.insert(0, pr)
+except Exception:
+    pass
+
+# ===================== SAFE IMPORTS (NO PySide6 / NO ui.* HERE) =====================
+from core.config import APP_NAME, APP_VERSION, DB_FILE, WHEELS_DIR, LOGS_DIR, ensure_folders  # type: ignore
+from core.logger import setup_logging  # type: ignore
+from core.selfcheck import self_check_and_fix  # type: ignore
+from core.db import init_db  # type: ignore
+from core.backup import apply_pending_full_restore  # type: ignore
+from core.session import set_current_user, actor_name, can  # type: ignore
+
+from core.rbac import (  # type: ignore
+    PERM_ASSETS_VIEW, PERM_ASSETS_CREATE,
+    PERM_ASSETS_MY_VIEW,
+    PERM_ASSETS_METRO_VIEW,
+    PERM_ASSIGN_VIEW, PERM_ASSIGN_CREATE,
+    PERM_AUDIT_VIEW,
+    PERM_METRO_VIEW,
+    PERM_USERS_VIEW,
+    PERM_SETTINGS_VIEW,
+)
+
+from services.users_service import ensure_users_schema  # type: ignore
+
+# ===================== GLOBAL CRASH/LOGGING HOOKS =====================
+_HOOKS_INSTALLED = False
+_ORIG_SYS_EXCEPTHOOK = sys.excepthook
+_FAULT_FILE_HANDLE = None
+_QT_MSG_HANDLER_INSTALLED = False
+
+
+def _safe_mkdir(p: str) -> None:
+    try:
+        os.makedirs(p, exist_ok=True)
+    except Exception:
+        pass
+
+
+def _write_crash_report(logger: logging.Logger, title: str, exc_info=None) -> None:
+    """Best-effort crash report. Nikad ne sme da sruši app."""
+    try:
+        _safe_mkdir(str(LOGS_DIR))
+        fp = Path(LOGS_DIR) / "crash_last.txt"
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        pid = os.getpid()
+        th = threading.current_thread().name
+
+        lines = [
+            f"[{now}] {title}",
+            f"APP={APP_NAME} v={APP_VERSION}",
+            f"PID={pid} THREAD={th}",
+            f"DB_FILE={DB_FILE}",
+            "",
+        ]
+        if exc_info:
+            lines.append("EXCEPTION:")
+            lines.append("".join(traceback.format_exception(*exc_info)))
+        else:
+            lines.append("EXCEPTION: (n/a)")
+
+        fp.write_text("\n".join(lines), encoding="utf-8", errors="ignore")
+    except Exception:
+        try:
+            logger.error("Crash report write failed.", exc_info=True)
+        except Exception:
+            pass
+
+
+def _install_exception_hooks(logger: logging.Logger) -> None:
+    """sys/thread hooks + faulthandler; Qt handler ide tek kad PySide6 postoji."""
+    global _HOOKS_INSTALLED, _FAULT_FILE_HANDLE
+    if _HOOKS_INSTALLED:
+        return
+    _HOOKS_INSTALLED = True
+
+    def _sys_hook(exc_type, exc, tb):
+        try:
+            logger.critical("UNHANDLED EXCEPTION (sys.excepthook)", exc_info=(exc_type, exc, tb))
+        except Exception:
+            pass
+        try:
+            _write_crash_report(logger, "UNHANDLED EXCEPTION (sys.excepthook)", exc_info=(exc_type, exc, tb))
+        except Exception:
+            pass
+        try:
+            _ORIG_SYS_EXCEPTHOOK(exc_type, exc, tb)
+        except Exception:
+            pass
+
+    sys.excepthook = _sys_hook
+
+    if hasattr(threading, "excepthook"):
+        _orig_thread_hook = threading.excepthook
+
+        def _thread_hook(args):
+            try:
+                logger.critical(
+                    f"UNHANDLED THREAD EXCEPTION thread={getattr(args.thread, 'name', '?')}",
+                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+                )
+            except Exception:
+                pass
+            try:
+                _write_crash_report(
+                    logger,
+                    f"UNHANDLED THREAD EXCEPTION thread={getattr(args.thread, 'name', '?')}",
+                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+                )
+            except Exception:
+                pass
+            try:
+                _orig_thread_hook(args)
+            except Exception:
+                pass
+
+        threading.excepthook = _thread_hook
+
+    try:
+        import faulthandler  # stdlib
+        _safe_mkdir(str(LOGS_DIR))
+        fh_path = Path(LOGS_DIR) / "faulthandler.log"
+        _FAULT_FILE_HANDLE = open(fh_path, "a", encoding="utf-8", buffering=1)
+        faulthandler.enable(file=_FAULT_FILE_HANDLE, all_threads=True)
+        try:
+            logger.info(f"Faulthandler enabled: {fh_path}")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+# ===================== DEPENDENCY / INSTALL HELPERS =====================
+def _module_exists(module_name: str) -> bool:
+    """True ako import spec postoji (bez importovanja)."""
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except Exception:
+        return False
+
+
+def _prompt_yes_no(prompt: str, default_no: bool = True) -> bool:
+    """CLI prompt; ako nema TTY -> False (fail-safe)."""
+    try:
+        if not sys.stdin or not sys.stdin.isatty():
+            return False
+    except Exception:
+        return False
+
+    suffix = " [y/N]: " if default_no else " [Y/n]: "
+    try:
+        ans = input(prompt + suffix).strip().lower()
+    except Exception:
+        return False
+
+    if not ans:
+        return (not default_no)
+    return ans in ("y", "yes", "da", "d")
+
+
+def _pip_install_offline_from_wheels(
+    logger: logging.Logger,
+    requirements: List[str],
+    wheels_dir: Path,
+) -> Tuple[bool, str]:
+    """Offline pip install iz foldera sa .whl (WHEELS_DIR)."""
+    reqs = [r.strip() for r in (requirements or []) if str(r).strip()]
+    if not reqs:
+        return True, "No requirements to install."
+
+    wheels_dir = Path(wheels_dir)
+    if not wheels_dir.exists():
+        return False, f"WHEELS_DIR ne postoji: {wheels_dir}"
+
+    cmd = [
+        sys.executable, "-m", "pip", "install",
+        "--no-index",
+        "--find-links", str(wheels_dir),
+        *reqs,
+    ]
+    try:
+        _safe_mkdir(str(LOGS_DIR))
+        log_fp = Path(LOGS_DIR) / "pip_install_last.txt"
+        with open(log_fp, "w", encoding="utf-8", errors="ignore") as f:
+            f.write("CMD: " + " ".join(cmd) + "\n\n")
+            proc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, cwd=str(_PROJECT_ROOT))
+        ok = (proc.returncode == 0)
+        msg = f"pip install {'OK' if ok else 'FAILED'} (exit={proc.returncode}). Log: {log_fp}"
+        try:
+            (logger.info if ok else logger.error)(msg)
+        except Exception:
+            pass
+        return ok, msg
+    except Exception as e:
+        return False, f"pip install error: {e}"
+
+
+def _dependency_plan() -> Dict[str, List[str]]:
+    """MUST za UI."""
+    return {"ui": ["PySide6"]}
+
+
+def _preflight_dependencies(logger: logging.Logger) -> bool:
+    """
+    1) Brza provera MUST modula (PySide6)
+    2) Prikaži šta fali
+    3) Pitaj korisnika da potvrdi offline instalaciju iz WHEELS_DIR
+    """
+    plan = _dependency_plan()
+    missing: List[str] = []
+    for _, mods in plan.items():
+        for m in mods:
+            if not _module_exists(m):
+                missing.append(m)
+
+    if not missing:
+        return True
+
+    msg = (
+        "Nedostaju obavezne biblioteke:\n"
+        + "\n".join([f" - {m}" for m in missing])
+        + "\n\n"
+        f"Offline instalacija se radi iz: {WHEELS_DIR}\n"
+        "U taj folder ubaci odgovarajuće .whl pakete (i njihove dependencies).\n"
+    )
+    try:
+        logger.error(msg)
+    except Exception:
+        pass
+
+    if _prompt_yes_no("Da li želiš da pokušam OFFLINE instalaciju sada?", default_no=True):
+        ok, out = _pip_install_offline_from_wheels(logger, missing, Path(WHEELS_DIR))
+        if not ok:
+            print(msg)
+            print(out)
+            return False
+
+        still_missing = [m for m in missing if not _module_exists(m)]
+        if still_missing:
+            print(msg)
+            print("I dalje nedostaje:", ", ".join(still_missing))
+            return False
+
+        return True
+
+    print(msg)
+    print("Instalacija nije pokrenuta (nema potvrde / nema terminala).")
+    return False
+
+
+def show_fatal_message(title: str, message: str) -> None:
+    """Ako PySide6 postoji -> QMessageBox, inače stderr."""
+    if _module_exists("PySide6"):
+        try:
+            from PySide6.QtWidgets import QApplication as _QApp, QMessageBox as _QMsg  # type: ignore
+            _app = _QApp.instance() or _QApp(sys.argv)
+            _QMsg.critical(None, title, message)
+            return
+        except Exception:
+            pass
+    print(f"[FATAL] {title}\n{message}", file=sys.stderr)
+
+# (FILENAME: app.py - END)  [PART 1/3]
+
+# FILENAME: app.py
+# (FILENAME: app.py - START)  [PART 2/3]
+
+# ===================== Qt message handler (install only when PySide6 exists) =====================
+def _install_qt_message_handler(logger: logging.Logger) -> None:
+    global _QT_MSG_HANDLER_INSTALLED
+    if _QT_MSG_HANDLER_INSTALLED:
+        return
+    if not _module_exists("PySide6"):
+        return
+    try:
+        from PySide6.QtCore import QtMsgType, qInstallMessageHandler  # type: ignore
+
+        def _qt_msg_handler(mode, context, message):
+            try:
+                if mode == QtMsgType.QtDebugMsg:
+                    lvl, tag = logging.DEBUG, "QT_DEBUG"
+                elif mode == QtMsgType.QtInfoMsg:
+                    lvl, tag = logging.INFO, "QT_INFO"
+                elif mode == QtMsgType.QtWarningMsg:
+                    lvl, tag = logging.WARNING, "QT_WARN"
+                elif mode == QtMsgType.QtCriticalMsg:
+                    lvl, tag = logging.ERROR, "QT_CRIT"
+                elif mode == QtMsgType.QtFatalMsg:
+                    lvl, tag = logging.CRITICAL, "QT_FATAL"
+                else:
+                    lvl, tag = logging.INFO, "QT"
+
+                loc = ""
+                try:
+                    f = getattr(context, "file", "") or ""
+                    line = getattr(context, "line", 0) or 0
+                    fn = getattr(context, "function", "") or ""
+                    if f or fn:
+                        loc = f" ({f}:{line} {fn})"
+                except Exception:
+                    loc = ""
+
+                logger.log(lvl, f"{tag}: {message}{loc}")
+            except Exception:
+                pass
+
+        qInstallMessageHandler(_qt_msg_handler)
+        _QT_MSG_HANDLER_INSTALLED = True
+    except Exception:
+        pass
+
+
+# ===================== self_check compatibility wrapper =====================
+def _run_selfcheck(logger: logging.Logger, auto_fix: bool) -> bool:
+    """
+    Kompatibilnost: u tvojoj bazi koda self_check_and_fix može imati različit potpis:
+    - self_check_and_fix(logger, auto_fix=True/False)
+    - self_check_and_fix(logger) -> bool
+    - self_check_and_fix(logger, fix=True/False) itd.
+    """
+    try:
+        return bool(self_check_and_fix(logger, auto_fix=bool(auto_fix)))  # type: ignore
+    except TypeError:
+        pass
+    try:
+        return bool(self_check_and_fix(logger, fix=bool(auto_fix)))  # type: ignore
+    except TypeError:
+        pass
+    try:
+        # fallback: bez parametara
+        return bool(self_check_and_fix(logger))  # type: ignore
+    except Exception:
+        try:
+            logger.exception("self_check_and_fix failed")
+        except Exception:
+            pass
+        return False
+
+
+# ======== LOGIN MEMORY ========
+_LAST_LOGIN_USER: Optional[object] = None
+
+
+def _remember_login_user(u: Optional[object]) -> None:
+    global _LAST_LOGIN_USER
+    _LAST_LOGIN_USER = u
+
+
+def _uget(u: object, key: str, default=None):
+    if u is None:
+        return default
+    try:
+        if isinstance(u, dict):
+            return u.get(key, default)
+        return getattr(u, key, default)
+    except Exception:
+        return default
+
+
+def _extract_role_from_user(u: Optional[object]) -> Optional[str]:
+    if u is None:
+        return None
+
+    for k in ("is_admin", "admin", "is_superuser", "superuser"):
+        v = _uget(u, k, None)
+        try:
+            if bool(v):
+                return "ADMIN"
+        except Exception:
+            pass
+
+    for k in ("is_basic", "basic", "is_basic_user"):
+        v = _uget(u, k, None)
+        try:
+            if bool(v):
+                return "BASIC_USER"
+        except Exception:
+            pass
+
+    role_keys = (
+        "active_role",
+        "role", "rbac_role", "user_role", "profile", "user_type", "type",
+        "perm_profile", "permission_profile", "access_profile", "ui_mode", "mode",
+    )
+    for k in role_keys:
+        v = _uget(u, k, None)
+        if not v:
+            continue
+        try:
+            if isinstance(v, dict):
+                for kk in ("name", "code", "role", "profile", "id"):
+                    vv = v.get(kk)
+                    if vv:
+                        return str(vv)
+                continue
+            return str(v)
+        except Exception:
+            continue
+
+    return None
+
+
+def _extract_username_like(u: Optional[object]) -> Optional[str]:
+    if u is None:
+        return None
+    keys = ("username", "login", "user", "email", "account", "name", "full_name", "display_name")
+    for k in keys:
+        v = _uget(u, k, None)
+        if v:
+            try:
+                return str(v)
+            except Exception:
+                pass
+    return None
+
+
+def _actor_name() -> str:
+    return actor_name()
+
+
+def _current_role_safe() -> str:
+    try:
+        from core.session import current_role  # type: ignore
+        return str(current_role() or "").strip()
+    except Exception:
+        return ""
+
+
+def _list_roles_safe() -> List[str]:
+    try:
+        from core.session import list_user_roles  # type: ignore
+        rr = list_user_roles()
+        out: List[str] = []
+        seen = set()
+        for x in rr:
+            s = str(x or "").strip().upper()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+        return out
+    except Exception:
+        return []
+
+
+def _set_active_role_safe(new_role: str, source: str = "ui_mainwindow_role_switch") -> bool:
+    try:
+        from core.session import set_active_role  # type: ignore
+        set_active_role(str(new_role or "").strip(), source=source, audit=True)
+        return True
+    except Exception:
+        return False
+
+
+def _sync_last_login_user_from_session() -> None:
+    global _LAST_LOGIN_USER
+    try:
+        from core.session import get_current_user  # type: ignore
+        su = get_current_user() or {}
+        if not su:
+            return
+
+        if isinstance(_LAST_LOGIN_USER, dict):
+            try:
+                _LAST_LOGIN_USER.update(dict(su))
+            except Exception:
+                _LAST_LOGIN_USER = dict(su)
+        else:
+            _LAST_LOGIN_USER = dict(su)
+    except Exception:
+        pass
+
+
+def _apply_global_theme(app, logger: logging.Logger) -> None:
+    """Fail-safe theme apply."""
+    try:
+        from ui.theme.theme_manager import apply_saved_theme as apply_theme_from_settings  # type: ignore
+        apply_theme_from_settings(app)
+        try:
+            logger.info("Theme applied (saved theme).")
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            logger.warning(f"Theme apply skipped: {e}")
+        except Exception:
+            pass
+
+# (FILENAME: app.py - END)  [PART 2/3]
+
+# FILENAME: app.py
+# (FILENAME: app.py - START)  [PART 3/3]
+
+def start_ui(logger: logging.Logger) -> None:
+    """
+    UI start se poziva tek posle:
+    - preflight dependencies (PySide6)
+    - self_check (šire deps)
+    """
+    # PySide6 imports tek sad
+    from PySide6.QtWidgets import (  # type: ignore
+        QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
+        QListWidget, QStackedWidget, QPushButton, QDialog, QMessageBox, QComboBox
+    )
+    from PySide6.QtCore import Qt  # type: ignore
+
+    # UI imports tek sad (posle PySide6)
+    try:
+        from ui.login_dialog import LoginDialog  # type: ignore
+        from ui.audit_page import AuditPage  # type: ignore
+        from ui.settings_page import SettingsPage  # type: ignore
+        from ui.metrology_page import MetrologyPage  # type: ignore
+        from ui.users_page import UsersPage  # type: ignore
+        from ui.assets_page import AssetsPage  # type: ignore
+        from ui.assignments_page import AssignmentsPage  # type: ignore
+        from ui.dashboard_page import DashboardPage  # type: ignore
+        from ui.my_assets_page import MyAssetsPage  # type: ignore
+    except Exception as e:
+        tb = traceback.format_exc()
+        _write_crash_report(logger, "UI import failed", exc_info=sys.exc_info())
+        show_fatal_message(
+            "BazaS2 — UI import error",
+            f"Ne mogu da importujem UI module.\n\n{e}\n\n{tb}",
+        )
+        raise
+
+    # METRO dashboard: fail-safe stub
+    _metro_err: Optional[str] = None
+    try:
+        from ui.metrology_dashboard_page import MetrologyDashboardPage  # type: ignore
+    except Exception as e:
+        _metro_err = str(e)
+
+        class MetrologyDashboardPage(QWidget):  # type: ignore
+            def __init__(self, logger: logging.Logger, parent=None):
+                super().__init__(parent)
+                lay = QVBoxLayout(self)
+                t = QLabel("Metrologija Dashboard (nije učitan)")
+                t.setStyleSheet("font-size: 18px; font-weight: 700;")
+                info = QLabel("Dashboard modul nije mogao da se učita.\n\n" f"Detalj: {_metro_err}")
+                info.setWordWrap(True)
+                info.setStyleSheet("color: #a00;")
+                lay.addWidget(t)
+                lay.addWidget(info, 1)
+
+            def refresh(self) -> None:
+                return
+
+    class RoleSwitchDialog(QDialog):
+        def __init__(self, roles: List[str], current: str, parent=None):
+            super().__init__(parent)
+            self.setWindowTitle("Promena uloge")
+            self.resize(380, 160)
+
+            self._roles = [str(r or "").strip().upper() for r in (roles or []) if str(r or "").strip()]
+            if not self._roles:
+                self._roles = [str(current or "READONLY").strip().upper()]
+
+            self.cb = QComboBox()
+            for r in self._roles:
+                self.cb.addItem(r, r)
+
+            cur = str(current or "").strip().upper()
+            if cur:
+                idx = self.cb.findText(cur, Qt.MatchFixedString)
+                if idx >= 0:
+                    self.cb.setCurrentIndex(idx)
+
+            self.btn_ok = QPushButton("Primeni")
+            self.btn_cancel = QPushButton("Otkaži")
+            self.btn_ok.clicked.connect(self.accept)
+            self.btn_cancel.clicked.connect(self.reject)
+
+            lay = QVBoxLayout(self)
+            lay.addWidget(QLabel("Izaberi aktivnu ulogu za ovu sesiju:"))
+            lay.addWidget(self.cb)
+
+            row = QHBoxLayout()
+            row.addStretch(1)
+            row.addWidget(self.btn_ok)
+            row.addWidget(self.btn_cancel)
+            lay.addLayout(row)
+
+        def selected_role(self) -> str:
+            return str(self.cb.currentData() or self.cb.currentText() or "").strip().upper()
+
+    class MainWindow(QMainWindow):
+        def __init__(self, logger: logging.Logger):
+            super().__init__()
+            self.logger = logger
+            self.setWindowTitle(f"{APP_NAME} — {APP_VERSION}")
+            self.resize(1200, 720)
+
+            central = QWidget()
+            root = QHBoxLayout(central)
+
+            self.nav = QListWidget()
+            self.nav.setFixedWidth(220)
+            self.pages = QStackedWidget()
+
+            root.addWidget(self.nav)
+            root.addWidget(self.pages, 1)
+            self.setCentralWidget(central)
+
+            self.statusBar().showMessage(f"DB: {DB_FILE} | Offline: ON | User: {_actor_name()}")
+
+            self.lb_role = QLabel("")
+            self.lb_role.setToolTip("Aktivna uloga (multi-role)")
+            self.statusBar().addPermanentWidget(self.lb_role)
+
+            self.btn_switch_role = QPushButton("Promeni ulogu")
+            self.btn_switch_role.setToolTip("Promeni aktivnu ulogu za ovu sesiju (audit log)")
+            self.statusBar().addPermanentWidget(self.btn_switch_role)
+            self.btn_switch_role.clicked.connect(self._on_switch_role_clicked)
+
+            self.btn_logout = QPushButton("Odjava")
+            self.btn_logout.setToolTip("Odjavi se i prijavi drugog korisnika")
+            self.statusBar().addPermanentWidget(self.btn_logout)
+            self.btn_logout.clicked.connect(self._logout)
+
+            self.nav.currentRowChanged.connect(self._on_nav_row_changed)
+
+            self._rebuild_ui_by_profile()
+            self._refresh_role_widgets()
+
+        def _safe_can(self, perm: str) -> bool:
+            try:
+                return bool(can(perm))
+            except Exception:
+                return False
+
+        def _ui_mode_reason(self) -> str:
+            u = _LAST_LOGIN_USER
+            role = (_extract_role_from_user(u) or "").strip().upper()
+            uname = (_extract_username_like(u) or "").strip()
+            return (
+                f"role={role or '—'}; user={uname or '—'}; "
+                f"users_view={int(self._safe_can(PERM_USERS_VIEW))}; "
+                f"settings_view={int(self._safe_can(PERM_SETTINGS_VIEW))}; "
+                f"assets_create={int(self._safe_can(PERM_ASSETS_CREATE))}; "
+                f"assign_create={int(self._safe_can(PERM_ASSIGN_CREATE))}"
+            )
+
+        def _refresh_role_widgets(self) -> None:
+            roles = _list_roles_safe()
+            cur = _current_role_safe().strip().upper() or (_extract_role_from_user(_LAST_LOGIN_USER) or "").strip().upper()
+            if not cur:
+                cur = "READONLY"
+            try:
+                self.lb_role.setText(f"Uloga: {cur}")
+            except Exception:
+                pass
+            try:
+                self.btn_switch_role.setVisible(bool(len(roles) >= 2))
+                self.btn_switch_role.setEnabled(bool(len(roles) >= 2))
+            except Exception:
+                pass
+
+        def _on_switch_role_clicked(self) -> None:
+            roles = _list_roles_safe()
+            if len(roles) < 2:
+                QMessageBox.information(self, "Info", "Ovaj korisnik nema više rola.")
+                return
+            cur = _current_role_safe().strip().upper()
+            dlg = RoleSwitchDialog(roles=roles, current=cur, parent=self)
+            if dlg.exec() != QDialog.Accepted:
+                return
+            new_role = dlg.selected_role()
+            if not new_role or new_role == cur:
+                return
+            if new_role not in roles:
+                QMessageBox.warning(self, "Greška", "Izabrana uloga nije dodeljena ovom korisniku.")
+                return
+            if not _set_active_role_safe(new_role, source="ui_mainwindow_role_switch"):
+                QMessageBox.warning(self, "Greška", "Ne mogu da promenim ulogu (role switch failed).")
+                return
+            _sync_last_login_user_from_session()
+            self._on_user_changed()
+            self._refresh_role_widgets()
+
+        def _nav_go_by_text(self, label: str) -> None:
+            try:
+                target = (label or "").strip()
+                if not target:
+                    return
+                for i in range(self.nav.count()):
+                    it = self.nav.item(i)
+                    if it is None:
+                        continue
+                    if (it.text() or "").strip() == target:
+                        if not (it.flags() & Qt.ItemIsEnabled):
+                            return
+                        self.nav.setCurrentRow(i)
+                        return
+            except Exception:
+                pass
+
+        def _is_metro_referent(self) -> bool:
+            cur = (_current_role_safe() or "").strip().upper()
+            if not cur:
+                cur = (_extract_role_from_user(_LAST_LOGIN_USER) or "").strip().upper()
+            return cur in {"REFERENT_METRO", "REFERENT_METROLOGIJE", "METRO_REFERENT"}
+
+        def _is_basic_user(self) -> bool:
+            cur = (_current_role_safe() or "").strip().upper()
+            if not cur:
+                cur = (_extract_role_from_user(_LAST_LOGIN_USER) or "").strip().upper()
+
+            BASIC_NAMES = {
+                "BASIC", "BASIC_USER", "USER", "EMPLOYEE", "KORISNIK", "OBICAN", "OBICAN_KORISNIK",
+                "READONLY", "READ_ONLY", "VIEWONLY", "VIEW_ONLY",
+            }
+            FULL_NAMES = {
+                "ADMIN", "SUPERUSER", "SECTOR_ADMIN",
+                "REFERENT_IT", "NACELNIK", "NAČELNIK", "MANAGER", "FULL",
+            }
+            if cur:
+                if cur in BASIC_NAMES:
+                    return True
+                if cur in FULL_NAMES:
+                    return False
+
+            if any([self._safe_can(PERM_USERS_VIEW), self._safe_can(PERM_ASSETS_CREATE), self._safe_can(PERM_ASSIGN_CREATE), self._safe_can(PERM_AUDIT_VIEW)]):
+                return False
+            return True
+
+        def _clear_pages(self) -> None:
+            try:
+                while self.pages.count() > 0:
+                    w = self.pages.widget(0)
+                    self.pages.removeWidget(w)
+                    try:
+                        w.setParent(None)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        def _rebuild_ui_by_profile(self) -> None:
+            _sync_last_login_user_from_session()
+            reason = self._ui_mode_reason()
+
+            self.nav.blockSignals(True)
+            try:
+                self.nav.clear()
+                self._clear_pages()
+
+                if self._is_metro_referent():
+                    self.nav.addItems(["Metrologija Dashboard", "Metrologija", "Moj Dashboard", "Moja oprema", "Podešavanja"])
+                    page_metro_dashboard = MetrologyDashboardPage(self.logger)
+                    page_metrology = MetrologyPage(self.logger)
+                    page_my_dashboard = DashboardPage(self.logger, scope_mode="my", on_go_assets=lambda: self._nav_go_by_text("Moja oprema"))
+                    page_my_assets = MyAssetsPage(self.logger)
+                    page_settings = SettingsPage(self.logger)
+
+                    for w in [page_metro_dashboard, page_metrology, page_my_dashboard, page_my_assets, page_settings]:
+                        self.pages.addWidget(w)
+
+                    self.nav.setCurrentRow(0)
+                    self.pages.setCurrentIndex(0)
+                    self.statusBar().showMessage(f"DB: {DB_FILE} | Offline: ON | User: {_actor_name()} | Mode: METRO | {reason}")
+                    return
+
+                if self._is_basic_user():
+                    self.nav.addItems(["Moj Dashboard", "Moja oprema", "Podešavanja"])
+                    page_dashboard = DashboardPage(self.logger, scope_mode="my", on_go_assets=lambda: self._nav_go_by_text("Moja oprema"))
+                    page_my_assets = MyAssetsPage(self.logger)
+                    page_settings = SettingsPage(self.logger)
+
+                    for w in [page_dashboard, page_my_assets, page_settings]:
+                        self.pages.addWidget(w)
+
+                    self.nav.setCurrentRow(0)
+                    self.pages.setCurrentIndex(0)
+                    self.statusBar().showMessage(f"DB: {DB_FILE} | Offline: ON | User: {_actor_name()} | Mode: BASIC | {reason}")
+                    return
+
+                # FULL
+                self.nav.addItems(["Dashboard", "Sredstva", "Zaduženja", "Audit", "Metrologija", "Korisnici", "Podešavanja", "Moj Dashboard", "Moja oprema"])
+
+                page_dashboard = DashboardPage(self.logger, on_go_assets=lambda: self._nav_go_by_text("Sredstva"), on_go_assign=lambda: self._nav_go_by_text("Zaduženja"), scope_mode="global")
+                page_assets = AssetsPage(self.logger)
+                page_assignments = AssignmentsPage(self.logger, page_assets)
+                page_audit = AuditPage(self.logger)
+                page_metrology = MetrologyPage(self.logger)
+                page_users = UsersPage(self.logger)
+                page_settings = SettingsPage(self.logger)
+                page_my_dashboard = DashboardPage(self.logger, scope_mode="my", on_go_assets=lambda: self._nav_go_by_text("Moja oprema"))
+                page_my_assets = MyAssetsPage(self.logger)
+
+                for w in [page_dashboard, page_assets, page_assignments, page_audit, page_metrology, page_users, page_settings, page_my_dashboard, page_my_assets]:
+                    self.pages.addWidget(w)
+
+                self.nav.setCurrentRow(0)
+                self.pages.setCurrentIndex(0)
+                self.statusBar().showMessage(f"DB: {DB_FILE} | Offline: ON | User: {_actor_name()} | Mode: FULL | {reason}")
+            finally:
+                self.nav.blockSignals(False)
+
+        def _on_user_changed(self) -> None:
+            try:
+                self._rebuild_ui_by_profile()
+            except Exception:
+                pass
+            self._refresh_role_widgets()
+
+        def _logout(self) -> None:
+            if QMessageBox.question(self, "Odjava", "Odjavi se i vrati na prijavu?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                return
+            try:
+                set_current_user(None)  # type: ignore[arg-type]
+            except Exception:
+                try:
+                    set_current_user({})  # type: ignore[arg-type]
+                except Exception:
+                    pass
+
+            dlg = LoginDialog(self, logger=self.logger)
+            if dlg.exec() != QDialog.Accepted:
+                return
+            u = dlg.selected_user()
+            if not u:
+                return
+            _remember_login_user(u)
+            set_current_user(u)
+            _sync_last_login_user_from_session()
+            self._on_user_changed()
+
+        def _on_nav_row_changed(self, row: int) -> None:
+            if row < 0 or row >= self.pages.count():
+                return
+            it = self.nav.item(row)
+            if it is not None and not (it.flags() & Qt.ItemIsEnabled):
+                return
+            self.pages.setCurrentIndex(row)
+
+    app = QApplication(sys.argv)
+
+    try:
+        QApplication.setApplicationName(APP_NAME)
+        QApplication.setApplicationDisplayName(APP_NAME)
+        QApplication.setOrganizationName("BazaS2")
+    except Exception:
+        pass
+
+    _install_qt_message_handler(logger)
+    _apply_global_theme(app, logger)
+
+    ensure_users_schema()
+
+    dlg = LoginDialog(None, logger=logger)
+    if dlg.exec() != QDialog.Accepted:
+        sys.exit(0)
+    u = dlg.selected_user()
+    if not u:
+        sys.exit(0)
+
+    _remember_login_user(u)
+    set_current_user(u)
+    _sync_last_login_user_from_session()
+
+    win = MainWindow(logger)
+    win.show()
+    sys.exit(app.exec())
+
+
+def main() -> int:
+    logger = setup_logging()
+    logger.info("Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).")
+    _install_exception_hooks(logger)
+
+    try:
+        ensure_folders()
+
+        did_apply, ok_restore, msg_restore = apply_pending_full_restore()
+        if did_apply:
+            if ok_restore:
+                logger.info(msg_restore)
+            else:
+                logger.error(msg_restore)
+                show_fatal_message("BazaS2 — FULL Restore failed", msg_restore)
+                return 4
+
+        args = sys.argv[1:]
+        selfcheck_only = ("--self-check-only" in args)
+        no_autofix = ("--no-autofix" in args)
+
+        # 1) Preflight MUST deps (PySide6) + user confirm install
+        if not _preflight_dependencies(logger):
+            show_fatal_message(
+                "BazaS2 — Missing dependencies",
+                "Nedostaju biblioteke (npr. PySide6).\n"
+                "Pogledaj konzolu i/ili data/logs/pip_install_last.txt.\n"
+                f"WHEELS_DIR: {WHEELS_DIR}",
+            )
+            return 2
+
+        # 2) Šira self-check provera (diagnostic)
+        ok = _run_selfcheck(logger, auto_fix=False)
+        if not ok:
+            if no_autofix:
+                msg = "Self-check nije prošao, a --no-autofix je uključen."
+                logger.error(msg)
+                show_fatal_message("BazaS2 — Missing dependencies", msg)
+                return 2
+
+            if _prompt_yes_no("Self-check nije prošao. Da li da pokušam OFFLINE auto-fix instalaciju?", default_no=True):
+                ok2 = _run_selfcheck(logger, auto_fix=True)
+                if not ok2:
+                    msg = (
+                        "Self-check i auto-fix nisu prošli.\n\n"
+                        f"Rešenje (offline): ubaci odgovarajuće .whl pakete u: {WHEELS_DIR}\n"
+                        "Detalji: data/logs/selfcheck_report.json i data/logs/pip_install_last.txt"
+                    )
+                    logger.error(msg)
+                    show_fatal_message("BazaS2 — Missing dependencies", msg)
+                    return 2
+            else:
+                msg = "Self-check nije prošao i instalacija nije potvrđena."
+                logger.error(msg)
+                show_fatal_message("BazaS2 — Missing dependencies", msg)
+                return 2
+
+        if selfcheck_only:
+            logger.info("Self-check-only mode: završavam bez pokretanja UI.")
+            return 0
+
+        old_v, latest_v = init_db()
+        logger.info(f"DB init OK. schema_version: {old_v} -> {latest_v}")
+
+        start_ui(logger)
+        return 0
+
+    except Exception as e:
+        tb = traceback.format_exc()
+        try:
+            logger.error(f"FATAL ERROR: {e}")
+            logger.error(tb)
+        except Exception:
+            pass
+        _write_crash_report(logger, "FATAL ERROR (main)", exc_info=sys.exc_info())
+        show_fatal_message("BazaS2 — Fatal error", f"{e}\n\n{tb}")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+# (FILENAME: app.py - END)  [PART 3/3]
+
+---------------------------------------------------------------------------------------------------------------------
+
+
+
+
+ispravi ovo da ima sta treba. za instalaciju

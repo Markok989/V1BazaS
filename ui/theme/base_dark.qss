@@ -1,0 +1,188 @@
+/* FILENAME: ui/theme/base_dark.qss */
+/* (FILENAME: ui/theme/base_dark.qss - START) */
+
+/*
+Tokeni (zamena radi theme_manager.py):
+@BG@, @TEXT@, @TEXT_MUTED@,
+@PANEL@, @PANEL_2@, @PANEL_3@,
+@BORDER@, @GRID@,
+@PRIMARY@, @PRIMARY_HOVER@, @PRIMARY_SOFT@,
+@SELECTION_BG@, @SELECTION_TEXT@,
+@ALT_ROW@,
+@CHIP_BAR_BG@, @CHIP_BAR_BORDER@, @CHIP_BG@, @CHIP_BORDER@,
+@CHIP_X_BG@, @CHIP_X_BORDER@,
+@SCROLL_BG@, @SCROLL_HANDLE@, @SCROLL_HANDLE_HOVER@,
+@DISABLED_TEXT@, @DISABLED_BG@, @DISABLED_BORDER@
+*/
+
+QWidget {
+  background: @BG@;
+  color: @TEXT@;
+  font-size: 12px;
+}
+
+QLabel#title { font-size: 20px; font-weight: 900; }
+QLabel.muted { color: @TEXT_MUTED@; font-weight: 700; }
+
+QLineEdit {
+  background: @PANEL@;
+  border: 1px solid @BORDER@;
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+QLineEdit:focus { border: 1px solid @PRIMARY@; }
+
+QComboBox {
+  background: @PANEL@;
+  border: 1px solid @BORDER@;
+  border-radius: 10px;
+  padding: 6px 10px;
+}
+QComboBox:focus { border: 1px solid @PRIMARY@; }
+QComboBox::drop-down { border: 0px; width: 22px; }
+QComboBox QAbstractItemView {
+  background: @PANEL@;
+  border: 1px solid @BORDER@;
+  selection-background-color: @PRIMARY_SOFT@;
+}
+
+QCheckBox { spacing: 8px; color: @TEXT@; }
+QCheckBox::indicator {
+  width: 16px; height: 16px;
+  border-radius: 4px;
+  border: 1px solid @BORDER@;
+  background: @PANEL@;
+}
+QCheckBox::indicator:checked {
+  background: @PRIMARY@;
+  border: 1px solid @PRIMARY@;
+}
+
+QPushButton, QToolButton {
+  background: @PANEL@;
+  border: 1px solid @BORDER@;
+  border-radius: 10px;
+  padding: 8px 14px;
+}
+QPushButton:hover, QToolButton:hover { border: 1px solid @PRIMARY@; }
+QPushButton:pressed, QToolButton:pressed { background: @PANEL_3@; }
+
+QPushButton:disabled, QToolButton:disabled {
+  color: @DISABLED_TEXT@;
+  background: @DISABLED_BG@;
+  border: 1px solid @DISABLED_BORDER@;
+}
+
+QPushButton#primary {
+  background: @PRIMARY@;
+  border: 1px solid @PRIMARY@;
+  color: @SELECTION_TEXT@;
+  font-weight: 900;
+}
+QPushButton#primary:hover { background: @PRIMARY_HOVER@; }
+
+QToolButton#StatusBtn {
+  padding: 7px 12px;
+  border-radius: 12px;
+  font-weight: 900;
+}
+QToolButton#StatusBtn:checked {
+  border: 1px solid @PRIMARY@;
+  background: @PRIMARY_SOFT@;
+}
+
+QToolButton#FocusBtn {
+  padding: 7px 12px;
+  border-radius: 12px;
+  font-weight: 900;
+}
+QToolButton#FocusBtn:checked {
+  border: 1px solid @PRIMARY@;
+  background: @PRIMARY_SOFT@;
+}
+
+QToolButton#ColsBtn {
+  padding: 7px 12px;
+  border-radius: 12px;
+  font-weight: 900;
+}
+
+QFrame#kpiCard {
+  background: @PANEL_2@;
+  border: 1px solid @BORDER@;
+  border-radius: 14px;
+}
+QFrame#kpiCard:hover { border: 1px solid @PRIMARY@; }
+
+QFrame#ChipBar {
+  background: @CHIP_BAR_BG@;
+  border: 1px solid @CHIP_BAR_BORDER@;
+  border-radius: 12px;
+}
+QPushButton#ChipX {
+  padding: 2px 7px;
+  border-radius: 9px;
+  font-weight: 900;
+  background: @CHIP_X_BG@;
+  border: 1px solid @CHIP_X_BORDER@;
+}
+QPushButton#ChipX:hover { border: 1px solid @PRIMARY@; }
+
+QTableWidget {
+  background: @PANEL_3@;
+  border: 1px solid @BORDER@;
+  border-radius: 12px;
+  gridline-color: @GRID@;
+  alternate-background-color: @ALT_ROW@;
+  selection-background-color: @SELECTION_BG@;
+  selection-color: @SELECTION_TEXT@;
+}
+QTableWidget::item {
+  padding: 7px 10px;
+  border-bottom: 1px solid @PANEL_2@;
+  border-right: 1px solid @PANEL_2@;
+  color: @TEXT@;
+}
+QTableWidget::item:hover { background: @PRIMARY_SOFT@; }
+QTableWidget::item:selected { background: @SELECTION_BG@; color: @SELECTION_TEXT@; }
+
+QHeaderView::section {
+  background: @PANEL@;
+  color: @TEXT@;
+  border: 0px;
+  border-bottom: 2px solid @GRID@;
+  border-right: 1px solid @GRID@;
+  padding: 10px 10px;
+  font-weight: 900;
+}
+
+QScrollBar:vertical {
+  background: @SCROLL_BG@;
+  width: 12px;
+  margin: 8px 2px 8px 2px;
+  border-radius: 6px;
+}
+QScrollBar::handle:vertical {
+  background: @SCROLL_HANDLE@;
+  min-height: 30px;
+  border-radius: 6px;
+}
+QScrollBar::handle:vertical:hover { background: @SCROLL_HANDLE_HOVER@; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+
+QScrollBar:horizontal {
+  background: @SCROLL_BG@;
+  height: 12px;
+  margin: 2px 8px 2px 8px;
+  border-radius: 6px;
+}
+QScrollBar::handle:horizontal {
+  background: @SCROLL_HANDLE@;
+  min-width: 30px;
+  border-radius: 6px;
+}
+QScrollBar::handle:horizontal:hover { background: @SCROLL_HANDLE_HOVER@; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+
+/* (FILENAME: ui/theme/base_dark.qss - END) */
+/* FILENAME: ui/theme/base_dark.qss */
