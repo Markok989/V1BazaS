@@ -1,145 +1,118 @@
-# -*- coding: utf-8 -*-
 # FILENAME: ui/assets_page.py
-# (FILENAME: ui/assets_page.py - START PART 1)
-"""
-BazaS2 (offline) — ui/assets_page.py
-
-Sredstva — UI (V1):
-- Tabovi: Aktivna / Bez zaduženja / Rashodovana / Sva
-- Filteri (DB) + Brzi filter (instant) (ako postoji helper)
-- Kreiraj novo sredstvo
-- Detalji sredstva (AssetDetailDialog)
-- Desni Preview panel (collapse/expand)
-
-UX/Perf polish (bez menjanja osnovne logike):
-- Persist: tab/scope/category/status/search + preview + splitter state
-- Persist: sort indikator (kolona + smer) + (fallback) header state ako nema wire_columns
-- Empty-state poruka kad nema rezultata
-- Hard-cap info (npr. “prikazano prvih 5000”)
-- Stabilniji restore selekcije + scroll posle reload-a
-- Theme-aware stilovi za info/empty/preview/chips
-- CloseEvent: forsira persist (da se ne izgubi ako user odmah zatvori)
-
-Napomena:
-- Aplikacija je 100% offline.
-"""
-
+# (FILENAME: ui/assets_page.py - START PART 1/3)
+# -*- coding: utf-8 -*-
+"""BazaS2 — AssetsPage (offline)."""
 from __future__ import annotations
-
 import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import (  # type: ignore
-    Qt,
-    QTimer,
-    QSize,
-    QVariantAnimation,
-    QEasingCurve,
-    QRect,
-    QPoint,
-    QSettings,
-    QByteArray,
-    QEvent,
-)
-from PySide6.QtGui import (  # type: ignore
-    QColor,
-    QBrush,
-    QPainter,
-    QPalette,
-    QCursor,
-)
+from PySide6.QtCore import Qt, QTimer, QByteArray, QVariantAnimation, QEasingCurve, QEvent  # type: ignore
+from PySide6.QtGui import QColor, QBrush, QCursor, QPainter, QKeySequence, QShortcut  # type: ignore
 from PySide6.QtWidgets import (  # type: ignore
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QComboBox,
-    QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
-    QMessageBox,
-    QAbstractItemView,
-    QTabWidget,
-    QDialog,
-    QSplitter,
-    QFrame,
-    QFormLayout,
-    QApplication,
-    QToolButton,
-    QStyle,
-    QHeaderView,
-    QStyledItemDelegate,
-    QStyleOptionViewItem,
-    QLayout,
-    QLayoutItem,
-    QMenu,
+    QApplication, QWidget, QFrame, QLabel, QPushButton, QToolButton, QLineEdit, QComboBox, QTabWidget,
+    QSplitter, QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QHBoxLayout, QVBoxLayout,
+    QFormLayout, QMessageBox, QMenu, QDialog, QStyle, QStyledItemDelegate
 )
 
-from core.rbac import PERM_ASSETS_VIEW, PERM_ASSETS_CREATE, PERM_ASSETS_MY_VIEW, PERM_ASSETS_METRO_VIEW
-from services.assets_service import create_asset, list_assets, list_assets_brief
-from ui.asset_detail_dialog import AssetDetailDialog
-from ui.columns_dialog import ColSpec
-from ui.new_asset_dialog import NewAssetDialog
-
-
-# ---- fmt_dt_sr (fail-safe) ----
-try:
-    from ui.utils.datetime_fmt import fmt_dt_sr  # type: ignore
-except Exception:  # pragma: no cover
-    def fmt_dt_sr(x: Any) -> str:
-        return str(x or "").strip()
-
-
-# ---- wire_columns (fail-safe) ----
+# ---- optional helpers (safe import) ----
+wire_columns = None
+wire_table_selection_plus_copy = None
+TableToolsBar = None
+TableToolsConfig = None
 try:
     from ui.utils.table_columns import wire_columns  # type: ignore
-except Exception:  # pragma: no cover
-    wire_columns = None  # type: ignore
-
-
-# ---- copy helper (fail-safe) ----
+except Exception:
+    pass
 try:
     from ui.utils.table_copy import wire_table_selection_plus_copy  # type: ignore
-except Exception:  # pragma: no cover
-    wire_table_selection_plus_copy = None  # type: ignore
-
-
-# ---- quick tools (fail-safe) ----
+except Exception:
+    pass
 try:
     from ui.utils.table_search_sort import TableToolsBar, TableToolsConfig  # type: ignore
-except Exception:  # pragma: no cover
-    TableToolsBar = None  # type: ignore
-    TableToolsConfig = None  # type: ignore
+except Exception:
+    pass
 
+# ---- RBAC perms (prefer core.rbac constants) ----
+try:
+    from core.rbac import PERM_ASSETS_VIEW, PERM_ASSETS_CREATE, PERM_ASSETS_MY_VIEW, PERM_ASSETS_METRO_VIEW  # type: ignore
+except Exception:
+    PERM_ASSETS_VIEW = "assets.view"
+    PERM_ASSETS_CREATE = "assets.create"
+    PERM_ASSETS_MY_VIEW = "assets.my.view"
+    PERM_ASSETS_METRO_VIEW = "assets.metrology.view"
 
-# -------------------- helpers --------------------
+# ---- services/dialogs ----
+try:
+    from services.assets_service import list_assets, create_asset  # type: ignore
+except Exception:
+    list_assets = None
+    create_asset = None
+try:
+    from ui.asset_detail_dialog import AssetDetailDialog  # type: ignore
+except Exception:
+    AssetDetailDialog = None
+try:
+    from ui.new_asset_dialog import NewAssetDialog  # type: ignore
+except Exception:
+    NewAssetDialog = None
+
+# ---- helpers ----
 def _can(perm: str) -> bool:
-    """Fail-closed RBAC check (ako session/can ne postoji => False)."""
     try:
         from core.session import can  # type: ignore
         return bool(can(perm))
     except Exception:
-        return False
-
+        try:
+            from core.rbac import can  # type: ignore
+            return bool(can(perm))
+        except Exception:
+            return False
 
 def _actor_name() -> str:
-    try:
-        from core.session import actor_name  # type: ignore
-        return (actor_name() or "user").strip() or "user"
-    except Exception:
-        return "user"
-
+    for fn in ("get_actor_display_name", "actor_name"):
+        try:
+            from core import session as s  # type: ignore
+            f = getattr(s, fn, None)
+            if callable(f):
+                return str(f() or "").strip()
+        except Exception:
+            pass
+    return "user"
 
 def _actor_key() -> str:
-    try:
-        from core.session import actor_key  # type: ignore
-        return (actor_key() or "").strip()
-    except Exception:
-        return ""
+    for fn in ("get_actor_username", "actor_key"):
+        try:
+            from core import session as s  # type: ignore
+            f = getattr(s, fn, None)
+            if callable(f):
+                return str(f() or "").strip()
+        except Exception:
+            pass
+    return ""
 
+def _settings():
+    try:
+        from PySide6.QtCore import QSettings  # type: ignore
+        return QSettings("BazaS2", "BazaS2")
+    except Exception:
+        from PySide6.QtCore import QSettings  # type: ignore
+        return QSettings()
+
+def _is_dark() -> bool:
+    try:
+        c = QApplication.palette().window().color()
+        return (0.2126*c.red()+0.7152*c.green()+0.0722*c.blue()) < 128
+    except Exception:
+        return True
+
+def fmt_dt_sr(x: Any) -> str:
+    try:
+        from ui.utils.datetime_fmt import fmt_dt_sr as _f  # type: ignore
+        return str(_f(x))
+    except Exception:
+        return str(x or "").strip()
 
 def _norm(x: Any) -> str:
     try:
@@ -147,64 +120,42 @@ def _norm(x: Any) -> str:
     except Exception:
         return ""
 
-
 def _cf(x: Any) -> str:
     return _norm(x).casefold()
 
-
 def _status_key(raw: Any) -> str:
-    """
-    Normalizuje status u stabilne ključne vrednosti.
-    Ne oslanjamo se da DB/service uvek vraća iste stringove.
-    """
     s = _cf(raw)
     if not s:
         return "unknown"
-    if any(x in s for x in ("rashod", "otpis", "retired", "disposed", "decommission", "archiv", "inactive")):
+    if "rashod" in s or "otpis" in s or "scrap" in s:
         return "scrapped"
-    if s in ("active", "in_use", "u_upotrebi", "upotrebi", "aktivno", "aktivna"):
-        return "active"
-    if any(x in s for x in ("on_loan", "loan", "assign", "zaduzen", "zaduž", "duzi", "duži")):
-        return "on_loan"
-    if any(x in s for x in ("service", "repair", "servis", "kalibr", "kalibracij", "metrolog")):
+    if "serv" in s or "kalibr" in s:
         return "service"
+    if "loan" in s or "zadu" in s or "duž" in s:
+        return "on_loan"
+    if s in ("active", "aktivno", "aktivna"):
+        return "active"
     return s
 
-
-def _safe_int(v: Any) -> Optional[int]:
-    """Ekstrakcija int-a iz raznih formata (TOC, NOM) – za sortiranje."""
+def _safe_int(v: Any) -> int:
     try:
-        if v is None or isinstance(v, bool):
-            return None
-        if isinstance(v, int):
-            return v
-        if isinstance(v, float):
-            return int(v)
-        s = str(v).strip()
-        digits = "".join(ch for ch in s if ch.isdigit())
-        return int(digits) if digits else None
+        digits = "".join(ch for ch in _norm(v) if ch.isdigit())
+        return int(digits) if digits else 0
     except Exception:
-        return None
+        return 0
 
-
-def _safe_dt_sort_value(v: Any) -> Optional[int]:
-    """Sort value za datetime; tolerantno na ISO-ish stringove."""
+def _safe_dt_sort_value(v: Any) -> int:
     try:
-        if v is None:
-            return None
         if isinstance(v, datetime):
             return int(v.timestamp())
-        s = str(v or "").strip().replace("Z", "").replace("T", " ")
+        s = _norm(v).replace("Z","").replace("T"," ")
         if not s:
-            return None
+            return 0
         return int(datetime.fromisoformat(s).timestamp())
     except Exception:
-        return None
-
+        return 0
 
 def _row_as_dict(r: Any) -> Dict[str, Any]:
-    if r is None:
-        return {}
     if isinstance(r, dict):
         return r
     try:
@@ -212,671 +163,1026 @@ def _row_as_dict(r: Any) -> Dict[str, Any]:
     except Exception:
         return {}
 
-
 def _get_nomenclature(r: Dict[str, Any]) -> str:
-    for k in ("nomenclature_number", "nomenclature_no", "nomenklaturni_broj", "nom_broj", "nom_no", "nomen"):
-        try:
-            v = str(r.get(k, "") or "").strip()
-            if v:
-                return v
-        except Exception:
-            pass
+    for k in ("nomenclature_number","nomenclature_no","nomenklaturni_broj","nomenclature"):
+        v = _norm(r.get(k,""))
+        if v:
+            return v
     return ""
 
+def _is_scrapped(r: Dict[str, Any]) -> bool:
+    return _status_key(r.get("status","")) == "scrapped"
 
 def _is_unassigned(r: Dict[str, Any]) -> bool:
-    return not _norm(r.get("current_holder", "") or r.get("assigned_to", ""))
-
-
-def _is_scrapped(r: Dict[str, Any]) -> bool:
-    return _status_key(r.get("status", "")) == "scrapped"
-
-
-def _scope_candidates_lower() -> List[str]:
-    """Kandidati koji mogu biti upisani kao holder (ključ/ime) – sve casefold."""
-    cand: List[str] = []
-    ak = _actor_key()
-    if ak:
-        cand.append(ak)
-    an = _actor_name()
-    if an:
-        cand.append(an)
-
-    out: List[str] = []
-    seen = set()
-    for c in cand:
-        cc = str(c or "").strip().casefold()
-        if cc and cc not in seen:
-            seen.add(cc)
-            out.append(cc)
-    return out
-
-
-def _is_my_asset_ui(r: Dict[str, Any]) -> bool:
-    holder = _norm(r.get("current_holder", "") or r.get("assigned_to", ""))
-    h = holder.casefold()
-    return bool(holder) and any(h == c for c in _scope_candidates_lower())
-
+    return not _norm(r.get("current_holder","") or r.get("assigned_to",""))
 
 def _is_metro_asset_ui(r: Dict[str, Any]) -> bool:
-    cat = _cf(r.get("category", ""))
-    if "metrolog" in cat:
+    if "metrolog" in _cf(r.get("category","")):
         return True
-    for k in ("is_metrology", "is_metro", "metrology_flag", "metro_flag", "calibration_required", "needs_calibration"):
-        if k in r:
-            try:
-                if bool(r.get(k)):
-                    return True
-            except Exception:
-                pass
-    return False
-
-
-def _try_create_assignment_after_create(asset_uid: str, to_holder: str, to_location: str = "", note: str = "") -> None:
-    """
-    Best-effort auto-zaduženje nakon kreiranja sredstva.
-    FAIL-SAFE: ako servis/helper ne postoji => tiho preskoči (ne ruši UI).
-    """
-    holder = (to_holder or "").strip()
-    if not asset_uid or not holder:
-        return
     try:
-        from services.assignments_service import create_assignment  # type: ignore
-        create_assignment(
-            actor=_actor_name(),
-            asset_uid=asset_uid,
-            action="assign",
-            to_holder=holder,
-            to_location=(to_location or "").strip(),
-            note=(note or "").strip(),
-            source="ui_new_asset_autozad",
-        )
+        return bool(int(r.get("is_metrology",0) or 0))
     except Exception:
-        # fallback ako postoji DB helper (ne mora postojati)
-        try:
-            from core.db import create_assignment_db  # type: ignore
-            create_assignment_db(
-                actor=_actor_name(),
-                asset_uid=asset_uid,
-                action="assign",
-                to_holder=holder,
-                to_location=(to_location or "").strip(),
-                note=(note or "").strip(),
-                source="ui_new_asset_autozad",
-            )
-        except Exception:
-            return
-
-
-def _is_dark_theme() -> bool:
-    try:
-        a = QApplication.instance()
-        pal = a.palette() if a else QApplication.palette()
-        return pal.color(QPalette.Window).value() < 128
-    except Exception:
-        return True
-
-
-def _settings() -> QSettings:
-    return QSettings("BazaS2", "BazaS2")
-
-
-def _qss_banner(dark: bool) -> str:
-    if dark:
-        return "padding:6px 10px; border-radius:10px; background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.88);"
-    return "padding:6px 10px; border-radius:10px; background: rgba(0,0,0,0.04); color: rgba(0,0,0,0.78);"
-
-
-def _qss_empty(dark: bool) -> str:
-    if dark:
-        return "padding:14px; color: rgba(255,255,255,0.75); font-weight:600;"
-    return "padding:14px; color: rgba(0,0,0,0.55); font-weight:600;"
-
-
-def _qss_btn_soft(dark: bool) -> str:
-    """Soft dugme stil (dark/light aware) – koristi se za preview toggle."""
-    if dark:
-        return (
-            "QToolButton{ border:1px solid rgba(255,255,255,0.22); background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.90); }"
-            "QToolButton:hover{ border-color: rgba(255,255,255,0.40); background: rgba(255,255,255,0.10); }"
-            "QToolButton:pressed{ background: rgba(255,255,255,0.14); }"
-            "QToolButton:focus{ border-color: rgba(90,170,255,0.75); }"
-        )
-    return (
-        "QToolButton{ border:1px solid rgba(0,0,0,0.20); background: rgba(0,0,0,0.03); color: rgba(0,0,0,0.88); }"
-        "QToolButton:hover{ border-color: rgba(0,0,0,0.35); background: rgba(0,0,0,0.06); }"
-        "QToolButton:pressed{ background: rgba(0,0,0,0.08); }"
-        "QToolButton:focus{ border-color: rgba(60,130,255,0.75); }"
-    )
-
-
-class _SignalBlock:
-    """Minimal helper: blockSignals(True) na entry, restore na exit."""
-    def __init__(self, *objs: Any):
-        self._objs = [o for o in objs if o is not None]
-        self._prev: List[bool] = []
-
-    def __enter__(self):
-        self._prev = []
-        for o in self._objs:
-            try:
-                self._prev.append(bool(o.blockSignals(True)))
-            except Exception:
-                self._prev.append(False)
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        for o, prev in zip(self._objs, self._prev):
-            try:
-                o.blockSignals(bool(prev))
-            except Exception:
-                pass
         return False
 
+def _is_my_asset_ui(r: Dict[str, Any]) -> bool:
+    holder = _cf(r.get("current_holder","") or r.get("assigned_to",""))
+    me_u, me_n = _cf(_actor_key()), _cf(_actor_name())
+    return bool(holder and ((me_u and me_u in holder) or (me_n and me_n in holder)))
 
-# -------------------- Sortable item (numeričko sortiranje) --------------------
 class SortableItem(QTableWidgetItem):
-    def __init__(self, text: str = "", sort_value: Any = None):
+    def __init__(self, text: str, sort_value: Any = None):
         super().__init__(text)
-        if sort_value is not None:
-            try:
-                self.setData(Qt.UserRole, sort_value)
-            except Exception:
-                pass
-
+        try: self.setData(Qt.UserRole, text if sort_value is None else sort_value)
+        except Exception: pass
     def __lt__(self, other: "QTableWidgetItem") -> bool:
         try:
-            a = self.data(Qt.UserRole)
-            b = other.data(Qt.UserRole)
-            if a is not None and b is not None:
-                return a < b
+            a,b = self.data(Qt.UserRole), other.data(Qt.UserRole)
+            if isinstance(a,(int,float)) and isinstance(b,(int,float)): return float(a)<float(b)
+            return str(a)<str(b)
         except Exception:
-            pass
-        return super().__lt__(other)
+            return super().__lt__(other)
 
+class _RowTintDelegate(QStyledItemDelegate):
+    def __init__(self, parent: QWidget, status_col: int, palette: Dict[str, Tuple[QColor,QColor]], accent_px: int = 3):
+        super().__init__(parent); self._c=int(status_col); self._p=dict(palette or {}); self._a=max(1,int(accent_px))
+    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+        try: selected = bool(option.state & QStyle.State_Selected)
+        except Exception: selected = False
+        if not selected:
+            try:
+                st = index.model().index(index.row(), self._c).data()
+                key = _status_key(st)
+                accent,tint = self._p.get(key, self._p.get("unknown",(QColor("#a0a6b6"), QColor(0,0,0,0))))
+                r = option.rect; painter.save()
+                if tint.alpha()>0: painter.fillRect(r,tint)
+                if index.column()==0: painter.fillRect(r.adjusted(0,0,-r.width()+self._a,0), accent)
+                painter.restore()
+            except Exception:
+                try: painter.restore()
+                except Exception: pass
+        super().paint(painter, option, index)
 
-# -------------------- FlowLayout (chip bar) --------------------
-class FlowLayout(QLayout):
-    def __init__(self, parent=None, margin: int = 0, hspacing: int = 6, vspacing: int = 6):
-        super().__init__(parent)
-        self._items: List[QLayoutItem] = []
-        self.setContentsMargins(margin, margin, margin, margin)
-        self._h, self._v = int(hspacing), int(vspacing)
-
-    def addItem(self, item: QLayoutItem) -> None:
-        self._items.append(item)
-
-    def addWidget(self, w: QWidget) -> None:
-        from PySide6.QtWidgets import QWidgetItem  # type: ignore
-        self.addItem(QWidgetItem(w))
-
-    def count(self) -> int:
-        return len(self._items)
-
-    def itemAt(self, index: int) -> Optional[QLayoutItem]:
-        return self._items[index] if 0 <= index < len(self._items) else None
-
-    def takeAt(self, index: int) -> Optional[QLayoutItem]:
-        return self._items.pop(index) if 0 <= index < len(self._items) else None
-
-    def expandingDirections(self) -> Qt.Orientations:
-        return Qt.Orientations(0)
-
-    def hasHeightForWidth(self) -> bool:
-        return True
-
-    def heightForWidth(self, width: int) -> int:
-        return self._do_layout(QRect(0, 0, width, 0), True)
-
-    def setGeometry(self, rect: QRect) -> None:
-        super().setGeometry(rect)
-        self._do_layout(rect, False)
-
-    def sizeHint(self):
-        return self.minimumSize()
-
-    def minimumSize(self):
-        size = QSize()
-        for it in self._items:
-            size = size.expandedTo(it.minimumSize())
-        l, t, r, b = self.getContentsMargins()
-        return size + QSize(l + r, t + b)
-
-    def _do_layout(self, rect: QRect, test_only: bool) -> int:
-        l, t, r, b = self.getContentsMargins()
-        effective = QRect(rect.x() + l, rect.y() + t, rect.width() - (l + r), rect.height() - (t + b))
-
-        x, y, line_h = effective.x(), effective.y(), 0
-
-        for it in self._items:
-            w = it.widget()
-            if w and not w.isVisible():
-                continue
-            hint = it.sizeHint()
-            next_x = x + hint.width() + self._h
-            if next_x - self._h > effective.right() and line_h > 0:
-                x = effective.x()
-                y = y + line_h + self._v
-                next_x = x + hint.width() + self._h
-                line_h = 0
-            if not test_only:
-                it.setGeometry(QRect(QPoint(x, y), hint))
-            x = next_x
-            line_h = max(line_h, hint.height())
-
-        return y + line_h - rect.y() + b
-
-
-# -------------------- Filter chips (chip bar) --------------------
 @dataclass
 class ChipSpec:
     text: str
     on_remove: Callable[[], None]
     tooltip: str = ""
 
-
-class FilterChipsBar(QFrame):
+class FilterChipsBar(QWidget):
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QFrame.NoFrame)
-        self._clear_all: Optional[Callable[[], None]] = None
-
-        title = QLabel("Aktivni filteri:")
-        title.setObjectName("FilterChipsTitle")
-
-        self.btn_clear = QToolButton(self)
-        self.btn_clear.setText("Očisti sve")
-        self.btn_clear.setCursor(QCursor(Qt.PointingHandCursor))
-        self.btn_clear.setAutoRaise(True)
-        self.btn_clear.clicked.connect(lambda: self._clear_all and self._clear_all())
-
-        head = QHBoxLayout()
-        head.setContentsMargins(0, 0, 0, 0)
-        head.setSpacing(8)
-        head.addWidget(title, 0)
-        head.addStretch(1)
-        head.addWidget(self.btn_clear, 0)
-
-        self.host = QWidget(self)
-        self.flow = FlowLayout(self.host, margin=0, hspacing=6, vspacing=6)
-        self.host.setLayout(self.flow)
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
-        lay.addLayout(head)
-        lay.addWidget(self.host, 1)
-
-        self._apply_qss()
-        self.setVisible(False)
-
-    def _apply_qss(self) -> None:
-        try:
-            dark = _is_dark_theme()
-            chip_bg, chip_bg_h, chip_bd, title = (
-                ("rgba(255,255,255,0.08)", "rgba(255,255,255,0.12)", "rgba(255,255,255,0.18)", "rgba(255,255,255,0.82)")
-                if dark else
-                ("rgba(0,0,0,0.05)", "rgba(0,0,0,0.08)", "rgba(0,0,0,0.15)", "rgba(0,0,0,0.70)")
-            )
-            self.setStyleSheet(
-                "QLabel#FilterChipsTitle{ font-weight:700; color:%s; }"
-                "QToolButton#ChipBtn{ border:1px solid %s; border-radius:12px; background:%s; padding:5px 10px; }"
-                "QToolButton#ChipBtn:hover{ background:%s; }"
-                % (title, chip_bd, chip_bg, chip_bg_h)
-            )
-        except Exception:
-            pass
-
-    def set_clear_all_handler(self, fn: Callable[[], None]) -> None:
-        self._clear_all = fn
-
-    def set_chips(self, chips: List[ChipSpec]) -> None:
-        # clear
-        try:
-            while self.flow.count():
-                it = self.flow.takeAt(0)
-                if it and it.widget():
-                    it.widget().deleteLater()
-        except Exception:
-            pass
-
-        for spec in (chips or []):
-            btn = QToolButton(self.host)
-            btn.setObjectName("ChipBtn")
-            btn.setText(f"{spec.text}  ✕")
-            btn.setCursor(QCursor(Qt.PointingHandCursor))
-            if spec.tooltip:
-                btn.setToolTip(spec.tooltip)
-            btn.clicked.connect(spec.on_remove)
-            self.flow.addWidget(btn)
-
-        self.setVisible(bool(chips))
-
+        super().__init__(parent); self._clear: Optional[Callable[[],None]] = None
+        lay=QHBoxLayout(self); lay.setContentsMargins(0,0,0,0); lay.setSpacing(8)
+        self.btn_clear=QPushButton("Obriši sve"); self.btn_clear.clicked.connect(lambda: self._clear and self._clear()); lay.addWidget(self.btn_clear,0)
+        self.host=QWidget(self); self.hlay=QHBoxLayout(self.host); self.hlay.setContentsMargins(0,0,0,0); self.hlay.setSpacing(6); lay.addWidget(self.host,1)
+        self.refresh_theme(); self.set_chips([])
+    def set_clear_all_handler(self, fn: Callable[[],None]) -> None: self._clear = fn
     def refresh_theme(self) -> None:
-        self._apply_qss()
-
-
-# -------------------- Row tint delegate --------------------
-class _AssetsRowTintDelegate(QStyledItemDelegate):
-    def __init__(
-        self,
-        table: QTableWidget,
-        status_col: int,
-        palette: Dict[str, Tuple[QColor, QColor]],
-        accent_px: int = 3,
-    ):
-        super().__init__(table)
-        self._tbl = table
-        self._status_col = int(status_col)
-        self._accent_px = max(1, int(accent_px))
-        self._palette = dict(palette or {})
-
-    def _status_for_row(self, row: int) -> str:
+        dark=_is_dark()
         try:
-            it = self._tbl.item(row, self._status_col)
-            return _status_key(it.text() if it else "")
-        except Exception:
-            return "unknown"
-
-    def _is_first_visible_column(self, logical_col: int) -> bool:
+            self.setStyleSheet(
+                "QPushButton{padding:6px 10px;border-radius:12px;}"
+                + ("QPushButton{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.16);color:rgba(255,255,255,0.86);}" if dark
+                   else "QPushButton{background:rgba(0,0,0,0.04);border:1px solid rgba(0,0,0,0.12);color:rgba(0,0,0,0.82);}")
+            )
+        except Exception: pass
+    def set_chips(self, chips: List[ChipSpec]) -> None:
         try:
-            hdr = self._tbl.horizontalHeader()
-            return hdr.visualIndex(int(logical_col)) == 0
-        except Exception:
-            return logical_col == 0
+            while self.hlay.count():
+                it=self.hlay.takeAt(0); w=it.widget()
+                if w: w.deleteLater()
+        except Exception: pass
+        for ch in chips:
+            b=QPushButton(ch.text); b.setToolTip(ch.tooltip or ch.text); b.clicked.connect(ch.on_remove); self.hlay.addWidget(b,0)
+        self.hlay.addStretch(1); self.btn_clear.setVisible(bool(chips))
 
-    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
-        try:
-            row = int(index.row())
-            logical_col = int(index.column())
-        except Exception:
-            super().paint(painter, option, index)
-            return
-
-        st = self._status_for_row(row)
-        accent, tint = self._palette.get(
-            st,
-            self._palette.get("unknown", (QColor("#a0a6b6"), QColor(0, 0, 0, 0))),
-        )
-        is_selected = bool(option.state & QStyle.State_Selected)
-
-        painter.save()
-        try:
-            if not is_selected:
-                painter.fillRect(option.rect, tint)
-            if self._is_first_visible_column(logical_col):
-                r = QRect(option.rect)
-                stripe = QRect(r.left(), r.top(), self._accent_px, r.height())
-                painter.fillRect(stripe, accent)
-        finally:
-            painter.restore()
-
-        super().paint(painter, option, index)
-
-
-# -------------------- Preview panel --------------------
 class AssetPreviewPanel(QFrame):
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QFrame.StyledPanel)
-        self.setObjectName("assetPreviewPanel")
-
-        self._collapsed = False
-        self._expanded_min_w = 320
-        self._collapsed_w = 64
-
-        self._open_handler: Optional[Callable[[], None]] = None
-        self._open_slot: Optional[Callable[..., None]] = None
-
-        self._toggle_handler: Optional[Callable[[], None]] = None
-        self._toggle_slot: Optional[Callable[..., None]] = None
-
-        self.title = QLabel("Pregled sredstva")
+        super().__init__(parent); self.setFrameShape(QFrame.StyledPanel)
+        self._collapsed=False; self._cw=64; self._ew=340; self._uid=""
+        self._open: Optional[Callable[[],None]] = None; self._toggle: Optional[Callable[[],None]] = None
+        self.title=QLabel("Pregled sredstva")
+        self.btn_toggle=QToolButton(self); self.btn_toggle.setCursor(QCursor(Qt.PointingHandCursor)); self.btn_toggle.clicked.connect(lambda: self._toggle and self._toggle())
+        self.btn_open=QPushButton("Otvori detalje"); self.btn_open.clicked.connect(lambda: self._open and self._open())
+        self.btn_copy=QPushButton("Kopiraj UID"); self.btn_copy.clicked.connect(self._copy_uid)
+        self._fields: Dict[str,QLabel] = {}
+        form=QFormLayout(); form.setLabelAlignment(Qt.AlignLeft); form.setFormAlignment(Qt.AlignTop)
+        def add(k,lbl):
+            v=QLabel("—"); v.setTextInteractionFlags(Qt.TextSelectableByMouse); v.setWordWrap(True); self._fields[k]=v; form.addRow(QLabel(lbl), v)
+        for k,lbl in [("asset_uid","Asset UID:"),("rb","RB:"),("toc_number","TOC:"),("nomenclature","Nomenkl. broj:"),("serial_number","Serijski:"),("name","Naziv:"),("category","Kategorija:"),("status","Status:"),("current_holder","Zaduženo kod:"),("location","Lokacija:"),("updated_at","Ažurirano:")]:
+            add(k,lbl)
+        head=QHBoxLayout(); head.setContentsMargins(0,0,0,0); head.setSpacing(8); head.addWidget(self.title,1); head.addWidget(self.btn_toggle,0,Qt.AlignRight)
+        btns=QHBoxLayout(); btns.setContentsMargins(0,0,0,0); btns.setSpacing(8); btns.addWidget(self.btn_open,1); btns.addWidget(self.btn_copy,1)
+        lay=QVBoxLayout(self); lay.setContentsMargins(10,10,10,10); lay.setSpacing(10); lay.addLayout(head); lay.addLayout(form); lay.addStretch(1); lay.addLayout(btns)
+        self.refresh_theme(); self._refresh_toggle()
+    def refresh_theme(self) -> None:
+        try: self.btn_toggle.setStyleSheet("QToolButton{padding:6px 10px;border-radius:12px;}"+("QToolButton{border:1px solid rgba(255,255,255,0.22);background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.90);}QToolButton:hover{border-color:rgba(255,255,255,0.40);background:rgba(255,255,255,0.10);}" if _is_dark() else "QToolButton{border:1px solid rgba(0,0,0,0.18);background:rgba(0,0,0,0.04);color:rgba(0,0,0,0.86);}QToolButton:hover{border-color:rgba(0,0,0,0.28);background:rgba(0,0,0,0.07);}"))
+        except Exception: pass
+    def set_open_handler(self, fn: Callable[[],None]) -> None: self._open = fn
+    def set_toggle_handler(self, fn: Callable[[],None]) -> None: self._toggle = fn
+    def set_toggle_enabled(self, en: bool) -> None:
+        try: self.btn_toggle.setEnabled(bool(en))
+        except Exception: pass
+    def collapsed_width(self) -> int: return int(self._cw)
+    def expanded_width_hint(self) -> int: return int(self._ew)
+    def set_collapsed(self, collapsed: bool) -> None:
+        self._collapsed=bool(collapsed); self._refresh_toggle()
+        vis=not self._collapsed
+        for w in [self.title,self.btn_open,self.btn_copy,*self._fields.values()]:
+            try: w.setVisible(vis)
+            except Exception: pass
         try:
-            self.title.setStyleSheet("font-weight: 700; font-size: 14px;")
+            if self._collapsed: self.setMinimumWidth(self._cw); self.setMaximumWidth(self._cw)
+            else: self.setMinimumWidth(self._ew); self.setMaximumWidth(16777215)
+        except Exception: pass
+    def _refresh_toggle(self) -> None:
+        try:
+            st=self.style()
+            if not self._collapsed:
+                self.btn_toggle.setIcon(st.standardIcon(QStyle.SP_ArrowRight)); self.btn_toggle.setText("Sakrij"); self.btn_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            else:
+                self.btn_toggle.setIcon(st.standardIcon(QStyle.SP_ArrowLeft)); self.btn_toggle.setText("")
+        except Exception: pass
+    def clear(self) -> None:
+        self._uid="";
+        for lb in self._fields.values(): lb.setText("—")
+    def set_asset(self, r: Dict[str,Any]) -> None:
+        if not isinstance(r,dict) or not r: self.clear(); return
+        self._uid=_norm(r.get("asset_uid",""))
+        def setv(k,v):
+            lb=self._fields.get(k);
+            if lb: lb.setText(_norm(v) or "—")
+        setv("asset_uid",self._uid); setv("rb",r.get("rb","")); setv("toc_number",r.get("toc_number",""))
+        nom=_get_nomenclature(r); setv("nomenclature",nom)
+        for k in ("serial_number","name","category","status","current_holder","location"): setv(k,r.get(k,""))
+        setv("updated_at",fmt_dt_sr(r.get("updated_at","")))
+        try:
+            lb=self._fields.get("nomenclature")
+            if lb: lb.setStyleSheet("" if nom else "color:#ff8a80;font-weight:700;"); lb.setToolTip("" if nom else "Nomenklaturni broj nije unet.")
+        except Exception: pass
+    def _copy_uid(self) -> None:
+        if not self._uid: return
+        try: QApplication.clipboard().setText(self._uid)
+        except Exception: pass
+
+# (FILENAME: ui/assets_page.py - END PART 1/3)
+
+# FILENAME: ui/assets_page.py
+# (FILENAME: ui/assets_page.py - START PART 2/3)
+
+@dataclass
+class ColSpec:
+    key: str
+    label: str
+    default_visible: bool = True
+    default_width: int = 120
+
+
+class AssetsPage(QWidget):
+    # Columns (11)
+    COLS = [
+        "#",
+        "Asset UID", "TOC", "Nomenkl. broj", "Serijski",
+        "Naziv", "Kategorija", "Status",
+        "Zaduženo kod", "Lokacija", "Ažurirano",
+    ]
+    COL_IDX_ROWNUM = 0
+    COL_IDX_UID = 1
+    COL_IDX_TOC = 2
+    COL_IDX_NOM = 3
+    COL_IDX_SN = 4
+    COL_IDX_NAME = 5
+    COL_IDX_CAT = 6
+    COL_IDX_STATUS = 7
+    COL_IDX_HOLDER = 8
+    COL_IDX_LOC = 9
+    COL_IDX_UPD = 10
+
+    TAB_ACTIVE = "Aktivna"
+    TAB_UNASSIGNED = "Bez zaduženja"
+    TAB_SCRAPPED = "Rashodovana"
+    TAB_ALL = "Sva"
+
+    SCOPE_ALL = "Sva sredstva"
+    SCOPE_MY = "Moja oprema"
+    SCOPE_METRO = "Metrologija (scope)"
+
+    # settings
+    _SET_GROUP = "ui/assets_page"
+    _K_TAB = "tab_index"
+    _K_SCOPE = "scope_text"
+    _K_CAT = "category"
+    _K_STATUS = "status"
+    _K_SEARCH = "search"
+    _K_PREV_COLL = "preview_collapsed"
+    _K_PREV_W = "preview_width"
+    _K_SPLITTER = "splitter_state"
+    _K_SORT_COL = "sort_col"
+    _K_SORT_ORDER = "sort_order"
+    _K_HDR_STATE = "header_state_fallback"
+
+    _HARD_LIMIT = 5000
+
+    def __init__(self, logger: Optional[logging.Logger] = None, parent=None):
+        super().__init__(parent)
+        self.setObjectName("AssetsPage")
+        self.logger = logger or logging.getLogger(__name__)
+
+        # RBAC flags
+        self._has_any_view = False
+        self._has_full_view = False
+        self._has_my_view = False
+        self._has_metro_view = False
+
+        # state
+        self._loading = False
+        self._hidden_cache: List[bool] = []
+        self._sort_col = -1
+        self._sort_order = Qt.AscendingOrder
+
+        # pending restores
+        self._pending_splitter_state: Optional[QByteArray] = None
+        self._pending_preview_collapsed: Optional[bool] = None
+        self._pending_preview_width: Optional[int] = None
+        self._pending_sort: Optional[Tuple[int, Qt.SortOrder]] = None
+        self._pending_header_state: Optional[QByteArray] = None
+        self._layout_restored_once = False
+
+        # preview anim
+        self._preview_collapsed = False
+        self._preview_last_w: Optional[int] = None
+        self._preview_anim: Optional[QVariantAnimation] = None
+        self._preview_animating = False
+        self._anim_last_right: Optional[int] = None
+        self._anim_saved_stretch_last: Optional[bool] = None
+        self._anim_saved_vp_mode: Optional[QAbstractItemView.ViewportUpdateMode] = None
+
+        # palette
+        self._row_paint_palette: Dict[str, Tuple[QColor, QColor]] = {}
+        self._status_text_color: Dict[str, QColor] = {}
+        self._init_status_palette()
+
+        # timers
+        self._reload_timer = QTimer(self)
+        self._reload_timer.setSingleShot(True)
+        self._reload_timer.setInterval(180)
+        self._reload_timer.timeout.connect(self._on_reload_timeout)
+
+        self._persist_timer = QTimer(self)
+        self._persist_timer.setSingleShot(True)
+        self._persist_timer.setInterval(350)
+        self._persist_timer.timeout.connect(self._persist_ui_state)
+
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setInterval(250)
+        self._sync_timer.timeout.connect(self._poll_hidden_for_renumber)
+
+        # columns spec for wire_columns
+        self._col_specs = [
+            ColSpec("rownum", "#", True, 60),
+            ColSpec("asset_uid", "Asset UID", True, 160),
+            ColSpec("toc_number", "TOC", True, 120),
+            ColSpec("nomenclature_no", "Nomenkl. broj", True, 150),
+            ColSpec("serial_number", "Serijski", True, 140),
+            ColSpec("name", "Naziv", True, 260),
+            ColSpec("category", "Kategorija", True, 140),
+            ColSpec("status", "Status", True, 120),
+            ColSpec("current_holder", "Zaduženo kod", True, 160),
+            ColSpec("location", "Lokacija", True, 160),
+            ColSpec("updated_at", "Ažurirano", True, 150),
+        ]
+
+        # ---- UI ----
+        self.tabs = QTabWidget()
+        self.tabs.addTab(QWidget(), self.TAB_ACTIVE)
+        self.tabs.addTab(QWidget(), self.TAB_UNASSIGNED)
+        self.tabs.addTab(QWidget(), self.TAB_SCRAPPED)
+        self.tabs.addTab(QWidget(), self.TAB_ALL)
+
+        self.cb_scope = QComboBox()
+        self.cb_scope.setToolTip("Opseg prikaza (RBAC + scope)")
+
+        self.ed_search = QLineEdit()
+        self.ed_search.setClearButtonEnabled(True)
+        self.ed_search.setPlaceholderText("DB pretraga: RB / UID / TOC / NOM / serijski / naziv / lokacija / zaduženo")
+
+        self.cb_category = QComboBox()
+        self.cb_category.addItems(["SVE", "IT", "Metrologija", "OS", "SI", "Zalihe", "Ostalo"])
+
+        self.cb_status = QComboBox()
+        self.cb_status.addItems(["SVE", "active", "on_loan", "service", "scrapped"])
+
+        self.btn_search = QPushButton("Pretraži")
+        self.btn_refresh = QPushButton("Osveži")
+        self.btn_columns = QPushButton("Kolone")
+        self.btn_detail = QPushButton("Detalji")
+        self.btn_new = QPushButton("Novo")
+
+        self.btn_detail.setEnabled(False)
+
+        self.lb_rbac = QLabel("")
+        self.lb_rbac.setWordWrap(True)
+        self.lb_rbac.hide()
+
+        self.lb_info = QLabel("")
+        self.lb_info.setWordWrap(True)
+        self.lb_info.hide()
+
+        self.lb_empty = QLabel("Nema rezultata za izabrane filtere.")
+        self.lb_empty.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        self.lb_empty.hide()
+
+        self.chips = FilterChipsBar(self)
+        self.chips.set_clear_all_handler(self._clear_all_filters)
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Opseg:"))
+        top.addWidget(self.cb_scope, 1)
+        top.addWidget(self.ed_search, 3)
+        top.addWidget(self.btn_search)
+        top.addWidget(QLabel("Kategorija:"))
+        top.addWidget(self.cb_category, 1)
+        top.addWidget(QLabel("Status:"))
+        top.addWidget(self.cb_status, 1)
+        top.addWidget(self.btn_refresh)
+        top.addWidget(self.btn_columns)
+        top.addWidget(self.btn_detail)
+        top.addWidget(self.btn_new)
+
+        self.table = QTableWidget(0, len(self.COLS))
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        vh = self.table.verticalHeader()
+        vh.setVisible(True)
+        vh.setDefaultAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        vh.setHighlightSections(False)
+        try:
+            vh.setSectionResizeMode(QHeaderView.Fixed)
+            vh.setFixedWidth(46)
         except Exception:
             pass
 
-        self.btn_toggle_close = QToolButton(self)
-        self.btn_toggle_close.setCursor(QCursor(Qt.PointingHandCursor))
-        self.btn_toggle_close.setIconSize(QSize(16, 16))
-        self.btn_toggle_close.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.btn_toggle_close.setText("Sakrij pregled")
-        self.btn_toggle_close.setToolTip("Sakrij panel pregleda")
+        hdr = self.table.horizontalHeader()
+        hdr.setStretchLastSection(True)
+        hdr.setSectionsClickable(True)
+        hdr.setSectionsMovable(True)
+        hdr.setDefaultAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        hdr.setHighlightSections(False)
+        try:
+            hdr.setSectionResizeMode(QHeaderView.Interactive)
+            hdr.setFixedHeight(36)
+        except Exception:
+            pass
 
-        self.btn_toggle_open = QToolButton(self)
-        self.btn_toggle_open.setCursor(QCursor(Qt.PointingHandCursor))
-        self.btn_toggle_open.setIconSize(QSize(18, 18))
-        self.btn_toggle_open.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.btn_toggle_open.setText("P\nR\nE\nG\nL\nE\nD")
-        self.btn_toggle_open.setToolTip("Prikaži pregled")
-        self.btn_toggle_open.hide()
+        try:
+            self.table.verticalHeader().setDefaultSectionSize(30)
+        except Exception:
+            pass
 
-        self._refresh_toggle_icons()
-        self._apply_button_qss()
+        self.table.setSortingEnabled(True)
 
-        self._header_expanded = QWidget(self)
-        header_lay = QHBoxLayout(self._header_expanded)
-        header_lay.setContentsMargins(0, 0, 0, 0)
-        header_lay.setSpacing(8)
-        header_lay.addWidget(self.title, 1)
-        header_lay.addWidget(self.btn_toggle_close, 0, Qt.AlignRight)
+        # optional copy helper
+        try:
+            if wire_table_selection_plus_copy is not None:
+                wire_table_selection_plus_copy(self.table)
+        except Exception:
+            pass
 
-        self._header_collapsed = QWidget(self)
-        collapsed_lay = QVBoxLayout(self._header_collapsed)
-        collapsed_lay.setContentsMargins(0, 0, 0, 0)
-        collapsed_lay.setSpacing(0)
-        collapsed_lay.addStretch(1)
-        collapsed_lay.addWidget(self.btn_toggle_open, 0, Qt.AlignHCenter)
-        collapsed_lay.addStretch(1)
-        self._header_collapsed.hide()
+        # tint delegate
+        self._row_tint_delegate = _RowTintDelegate(
+            self.table,
+            status_col=self.COL_IDX_STATUS,
+            palette=self._row_paint_palette,
+            accent_px=3,
+        )
+        self.table.setItemDelegate(self._row_tint_delegate)
 
-        self._fields: Dict[str, QLabel] = {}
-        self.form = QFormLayout()
-        self.form.setLabelAlignment(Qt.AlignLeft)
-        self.form.setFormAlignment(Qt.AlignTop)
+        self._apply_table_visual_polish()
 
-        def _add(key: str, label: str) -> None:
-            v = QLabel("—")
-            v.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            v.setWordWrap(True)
-            self._fields[key] = v
-            self.form.addRow(QLabel(label), v)
+        # quick tools (optional)
+        if TableToolsBar is not None and TableToolsConfig is not None:
+            self.quick_tools = TableToolsBar(
+                self.table,
+                TableToolsConfig(
+                    placeholder="Brzi filter (instant): npr. fluke 1234 nom-55 pera",
+                    show_sort_toggle=True,
+                    default_sort_enabled=True,
+                    filter_columns=[
+                        self.COL_IDX_UID, self.COL_IDX_TOC, self.COL_IDX_NOM, self.COL_IDX_SN,
+                        self.COL_IDX_NAME, self.COL_IDX_CAT, self.COL_IDX_STATUS, self.COL_IDX_HOLDER, self.COL_IDX_LOC,
+                    ],
+                ),
+                parent=self,
+            )
+        else:
+            self.quick_tools = QLabel("")
+            self.quick_tools.setVisible(False)
 
-        _add("asset_uid", "Asset UID:")
-        _add("rb", "RB:")
-        _add("toc_number", "TOC:")
-        _add("nomenclature", "Nomenkl. broj:")
-        _add("serial_number", "Serijski:")
-        _add("name", "Naziv:")
-        _add("category", "Kategorija:")
-        _add("status", "Status:")
-        _add("current_holder", "Zaduženo kod:")
-        _add("location", "Lokacija:")
-        _add("updated_at", "Ažurirano:")
+        self.preview = AssetPreviewPanel(self)
+        self.preview.set_open_handler(self.open_selected_detail)
+        self.preview.set_toggle_handler(self._toggle_preview)
 
-        self.btn_open = QPushButton("Otvori detalje")
-        self.btn_copy_uid = QPushButton("Kopiraj UID")
-
-        self._current_uid = ""
-        self.btn_copy_uid.clicked.connect(self._copy_uid)
-
-        btns = QHBoxLayout()
-        btns.addWidget(self.btn_open, 1)
-        btns.addWidget(self.btn_copy_uid, 1)
-
-        self._content = QWidget(self)
-        content_lay = QVBoxLayout(self._content)
-        content_lay.addLayout(self.form)
-        content_lay.addStretch(1)
-        content_lay.addLayout(btns)
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.addWidget(self.table)
+        self.splitter.addWidget(self.preview)
+        self.splitter.setStretchFactor(0, 4)
+        self.splitter.setStretchFactor(1, 1)
+        try:
+            self.splitter.splitterMoved.connect(lambda *_a: self._state_dirty())
+        except Exception:
+            pass
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.setSpacing(8)
-        lay.addWidget(self._header_expanded)
-        lay.addWidget(self._header_collapsed, 1)
-        lay.addWidget(self._content, 1)
+        lay.addWidget(self.tabs)
+        lay.addLayout(top)
+        lay.addWidget(self.quick_tools)
+        lay.addWidget(self.chips)
+        lay.addWidget(self.lb_info)
+        lay.addWidget(self.lb_rbac)
+        lay.addWidget(self.lb_empty)
+        lay.addWidget(self.splitter, 1)
 
-        self.setMinimumWidth(self._expanded_min_w)
+        # ---- signals (KEY FIX: search textChanged does NOT reload DB) ----
+        self.btn_refresh.clicked.connect(self.request_reload)
+        self.btn_search.clicked.connect(self.request_reload)
+        self.btn_new.clicked.connect(self.new_asset)
+        self.btn_detail.clicked.connect(self.open_selected_detail)
 
-    def _apply_button_qss(self) -> None:
+        self.tabs.currentChanged.connect(lambda _i: (self._state_dirty(), self.request_reload()))
+        self.cb_scope.currentIndexChanged.connect(lambda _i: (self._state_dirty(), self.request_reload()))
+        self.cb_category.currentIndexChanged.connect(lambda _i: (self._state_dirty(), self.request_reload()))
+        self.cb_status.currentIndexChanged.connect(lambda _i: (self._state_dirty(), self.request_reload()))
+
+        # ✅ only persist + chips on typing; fetch happens on Enter or button
+        self.ed_search.textChanged.connect(lambda _t: (self._state_dirty(), self._rebuild_chips()))
+        self.ed_search.returnPressed.connect(self.request_reload)
+
+        self.table.cellDoubleClicked.connect(self.open_detail)
+        self.table.itemSelectionChanged.connect(self._on_selection_changed)
         try:
-            dark = _is_dark_theme()
-            base = _qss_btn_soft(dark)
-            self.btn_toggle_close.setStyleSheet(base + "QToolButton{ padding: 6px 10px; border-radius: 12px; }")
-            self.btn_toggle_open.setStyleSheet(base + "QToolButton{ padding: 10px 8px; border-radius: 16px; }")
+            self.table.horizontalHeader().sortIndicatorChanged.connect(self._on_sort_changed)
         except Exception:
             pass
 
-    def refresh_theme(self) -> None:
-        self._apply_button_qss()
-
-    def collapsed_width(self) -> int:
-        return int(self._collapsed_w)
-
-    def expanded_width_hint(self) -> int:
-        return int(self._expanded_min_w)
-
-    def set_toggle_enabled(self, enabled: bool) -> None:
-        try:
-            self.btn_toggle_close.setEnabled(enabled)
-            self.btn_toggle_open.setEnabled(enabled)
-        except Exception:
-            pass
-
-    def set_open_handler(self, fn: Callable[[], None]) -> None:
-        if self._open_slot is not None:
+        # header move/resize persist fallback (when no wire_columns)
+        if wire_columns is None:
             try:
-                self.btn_open.clicked.disconnect(self._open_slot)
+                hdr.sectionMoved.connect(lambda *_a: self._state_dirty())
+                hdr.sectionResized.connect(lambda *_a: self._state_dirty())
             except Exception:
                 pass
 
-        self._open_handler = fn
+        self._install_context_menu()
+        self._install_shortcuts()
 
-        def _slot(*_args: Any, **_kwargs: Any) -> None:
+        # columns dialog hook
+        if wire_columns is not None:
             try:
-                if self._open_handler:
-                    self._open_handler()
+                self._apply_cols_assets = wire_columns(self, self.table, self.btn_columns, "assets_table_v10", self._col_specs)
             except Exception:
-                return
+                self._apply_cols_assets = lambda: None
+        else:
+            self._apply_cols_assets = lambda: None
+            # don't leave dead button
+            try:
+                self.btn_columns.clicked.connect(
+                    lambda: QMessageBox.information(self, "Info", "Podešavanje kolona nije dostupno u ovom buildu.")
+                )
+            except Exception:
+                pass
 
-        self._open_slot = _slot
+        # theme + RBAC + restore
+        self._refresh_theme()
+        self._apply_rbac()
+        self._restore_ui_state()
+
+        if self._has_any_view:
+            self._sync_timer.start()
+            self.request_reload()
+
+    # -------------------- Qt events --------------------
+    def closeEvent(self, e) -> None:
+        self._stop_timers()
         try:
-            self.btn_open.clicked.connect(self._open_slot)
+            if self._preview_anim is not None:
+                self._preview_anim.stop()
+        except Exception:
+            pass
+        try:
+            self._persist_ui_state()
+        except Exception:
+            pass
+        try:
+            super().closeEvent(e)
         except Exception:
             pass
 
-    def set_toggle_handler(self, fn: Callable[[], None]) -> None:
-        if self._toggle_slot is not None:
-            for btn in (self.btn_toggle_close, self.btn_toggle_open):
+    def showEvent(self, e) -> None:
+        try:
+            super().showEvent(e)
+        except Exception:
+            pass
+        if not self._layout_restored_once:
+            self._layout_restored_once = True
+            QTimer.singleShot(0, self._apply_pending_layout_restore)
+
+    def changeEvent(self, e) -> None:
+        try:
+            if e and e.type() == QEvent.PaletteChange:
+                self._refresh_theme()
+        except Exception:
+            pass
+        try:
+            super().changeEvent(e)
+        except Exception:
+            pass
+
+    def event(self, ev) -> bool:
+        try:
+            if ev and ev.type() == QEvent.Destroy:
+                self._stop_timers()
+        except Exception:
+            pass
+        try:
+            return super().event(ev)
+        except Exception:
+            return False
+
+    # -------------------- timers --------------------
+    def _stop_timers(self) -> None:
+        for name in ("_reload_timer", "_persist_timer", "_sync_timer"):
+            try:
+                t = getattr(self, name, None)
+                if t is not None:
+                    t.stop()
+            except Exception:
+                pass
+
+    # -------------------- theme/visuals --------------------
+    def _refresh_theme(self) -> None:
+        dark = _is_dark()
+        try:
+            self.lb_info.setStyleSheet(
+                "QLabel{ padding:10px 12px; border-radius:14px; "
+                + ("background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.92); border:1px solid rgba(255,255,255,0.14); }"
+                   if dark else
+                   "background: rgba(0,0,0,0.04); color: rgba(0,0,0,0.82); border:1px solid rgba(0,0,0,0.12); }")
+            )
+        except Exception:
+            pass
+        try:
+            self.lb_empty.setStyleSheet(
+                "QLabel{ padding: 10px; "
+                + ("color: rgba(255,255,255,0.55); }" if dark else "color: rgba(0,0,0,0.45); }")
+            )
+        except Exception:
+            pass
+        try:
+            self.chips.refresh_theme()
+        except Exception:
+            pass
+        try:
+            self.preview.refresh_theme()
+        except Exception:
+            pass
+
+    def _init_status_palette(self) -> None:
+        self._row_paint_palette = {
+            "active": (QColor("#22c55e"), QColor(34, 197, 94, 28)),
+            "on_loan": (QColor("#3b82f6"), QColor(59, 130, 246, 26)),
+            "service": (QColor("#ffcc00"), QColor(255, 204, 0, 24)),
+            "scrapped": (QColor("#a0a6b6"), QColor(160, 166, 182, 22)),
+            "unknown": (QColor("#a0a6b6"), QColor(0, 0, 0, 0)),
+        }
+        self._status_text_color = {
+            "active": QColor("#22c55e"),
+            "on_loan": QColor("#3b82f6"),
+            "service": QColor("#ffcc00"),
+            "scrapped": QColor("#a0a6b6"),
+            "unknown": QColor("#b9beca"),
+        }
+
+    def _apply_table_visual_polish(self) -> None:
+        try:
+            self.table.setShowGrid(True)
+            self.table.setGridStyle(Qt.SolidLine)
+            self.table.setStyleSheet(
+                "QTableWidget{ gridline-color: rgba(140,140,140,0.35); }"
+                "QHeaderView::section{ padding: 6px 8px; border-right: 1px solid rgba(140,140,140,0.28);"
+                " border-bottom: 1px solid rgba(140,140,140,0.45); }"
+                "QTableCornerButton::section{ border-right: 1px solid rgba(140,140,140,0.28);"
+                " border-bottom: 1px solid rgba(140,140,140,0.45); }"
+            )
+        except Exception:
+            pass
+
+    # -------------------- persistence --------------------
+    def _state_dirty(self) -> None:
+        try:
+            self._persist_timer.start()
+        except Exception:
+            pass
+
+    def _persist_ui_state(self) -> None:
+        try:
+            s = _settings()
+            s.beginGroup(self._SET_GROUP)
+            try:
+                s.setValue(self._K_TAB, int(self.tabs.currentIndex()))
+                s.setValue(self._K_SCOPE, str(self.cb_scope.currentText() or ""))
+                s.setValue(self._K_CAT, str(self.cb_category.currentText() or "SVE"))
+                s.setValue(self._K_STATUS, str(self.cb_status.currentText() or "SVE"))
+                s.setValue(self._K_SEARCH, str(self.ed_search.text() or ""))
+
+                s.setValue(self._K_PREV_COLL, bool(self._preview_collapsed))
                 try:
-                    btn.clicked.disconnect(self._toggle_slot)
+                    sizes = self.splitter.sizes()
+                    w = int(sizes[1]) if sizes and len(sizes) >= 2 else int(self.preview.width())
+                except Exception:
+                    w = int(self.preview.width())
+                s.setValue(self._K_PREV_W, int(max(w, self.preview.collapsed_width())))
+
+                try:
+                    s.setValue(self._K_SPLITTER, self.splitter.saveState())
                 except Exception:
                     pass
 
-        self._toggle_handler = fn
+                try:
+                    hdr = self.table.horizontalHeader()
+                    s.setValue(self._K_SORT_COL, int(hdr.sortIndicatorSection()))
+                    s.setValue(self._K_SORT_ORDER, int(hdr.sortIndicatorOrder()))
+                except Exception:
+                    pass
 
-        def _slot(*_args: Any, **_kwargs: Any) -> None:
-            try:
-                if self._toggle_handler:
-                    self._toggle_handler()
-            except Exception:
-                return
-
-        self._toggle_slot = _slot
-        for btn in (self.btn_toggle_close, self.btn_toggle_open):
-            try:
-                btn.clicked.connect(self._toggle_slot)
-            except Exception:
-                pass
-
-    def set_collapsed(self, collapsed: bool) -> None:
-        self._collapsed = bool(collapsed)
-        self._refresh_toggle_icons()
-
-        if self._collapsed:
-            self._content.hide()
-            self._header_expanded.hide()
-            self.btn_toggle_open.show()
-            self._header_collapsed.show()
-            self.setMinimumWidth(self._collapsed_w)
-            self.setMaximumWidth(self._collapsed_w)
-        else:
-            self._header_collapsed.hide()
-            self.btn_toggle_open.hide()
-            self._header_expanded.show()
-            self._content.show()
-            self.setMinimumWidth(self._expanded_min_w)
-            self.setMaximumWidth(16777215)
-
-    def _refresh_toggle_icons(self) -> None:
-        try:
-            style = self.style()
-            self.btn_toggle_close.setIcon(style.standardIcon(QStyle.SP_ArrowRight))
-            self.btn_toggle_open.setIcon(style.standardIcon(QStyle.SP_ArrowLeft))
+                if wire_columns is None:
+                    try:
+                        s.setValue(self._K_HDR_STATE, self.table.horizontalHeader().saveState())
+                    except Exception:
+                        pass
+            finally:
+                s.endGroup()
         except Exception:
             pass
 
-    def clear(self) -> None:
-        self._current_uid = ""
-        for v in self._fields.values():
-            v.setText("—")
+    def _restore_ui_state(self) -> None:
+        try:
+            s = _settings()
+            s.beginGroup(self._SET_GROUP)
             try:
-                v.setStyleSheet("")
-                v.setToolTip("")
-            except Exception:
-                pass
+                tab_idx = s.value(self._K_TAB, 0)
+                scope_txt = str(s.value(self._K_SCOPE, "") or "")
+                cat_txt = str(s.value(self._K_CAT, "SVE") or "SVE")
+                st_txt = str(s.value(self._K_STATUS, "SVE") or "SVE")
+                search_txt = str(s.value(self._K_SEARCH, "") or "")
 
-    def set_asset(self, r: Dict[str, Any]) -> None:
-        if not isinstance(r, dict) or not r:
-            self.clear()
+                prev_coll = bool(s.value(self._K_PREV_COLL, False))
+                prev_w = s.value(self._K_PREV_W, self.preview.expanded_width_hint())
+                splitter_state = s.value(self._K_SPLITTER, None)
+
+                sort_col = s.value(self._K_SORT_COL, -1)
+                sort_order = s.value(self._K_SORT_ORDER, int(Qt.AscendingOrder))
+
+                hdr_state = s.value(self._K_HDR_STATE, None)
+            finally:
+                s.endGroup()
+        except Exception:
             return
 
-        uid = _norm(r.get("asset_uid", ""))
-        self._current_uid = uid
+        def to_int(x: Any, d: int) -> int:
+            try:
+                return int(x)
+            except Exception:
+                return int(d)
 
-        def _set(key: str, text: str) -> None:
-            lb = self._fields.get(key)
-            if lb:
-                lb.setText(text if text else "—")
+        tab_i = max(0, min(to_int(tab_idx, 0), self.tabs.count() - 1))
+        prev_w_i = max(self.preview.collapsed_width(), to_int(prev_w, self.preview.expanded_width_hint()))
+        sort_col_i = to_int(sort_col, -1)
+        sort_ord_i = to_int(sort_order, int(Qt.AscendingOrder))
 
-        _set("asset_uid", uid)
-        _set("rb", _norm(r.get("rb", "")))
-        _set("toc_number", _norm(r.get("toc_number", "")))
-
-        nom = _get_nomenclature(r)
-        _set("nomenclature", nom)
-
-        _set("serial_number", _norm(r.get("serial_number", "")))
-        _set("name", _norm(r.get("name", "")))
-        _set("category", _norm(r.get("category", "")))
-        _set("status", _norm(r.get("status", "")))
-        _set("current_holder", _norm(r.get("current_holder", "")))
-        _set("location", _norm(r.get("location", "")))
-
-        raw_upd = r.get("updated_at", "") or ""
         try:
-            disp = fmt_dt_sr(raw_upd)
+            self.tabs.blockSignals(True)
+            self.cb_scope.blockSignals(True)
+            self.cb_category.blockSignals(True)
+            self.cb_status.blockSignals(True)
+            self.ed_search.blockSignals(True)
+
+            self.tabs.setCurrentIndex(tab_i)
+
+            if scope_txt:
+                i = self.cb_scope.findText(scope_txt, Qt.MatchFixedString)
+                if i >= 0:
+                    self.cb_scope.setCurrentIndex(i)
+
+            i = self.cb_category.findText(cat_txt, Qt.MatchFixedString)
+            if i >= 0:
+                self.cb_category.setCurrentIndex(i)
+
+            i = self.cb_status.findText(st_txt, Qt.MatchFixedString)
+            if i >= 0:
+                self.cb_status.setCurrentIndex(i)
+
+            self.ed_search.setText(search_txt)
         except Exception:
-            disp = _norm(raw_upd)
-        _set("updated_at", disp)
+            pass
+        finally:
+            try:
+                self.tabs.blockSignals(False)
+                self.cb_scope.blockSignals(False)
+                self.cb_category.blockSignals(False)
+                self.cb_status.blockSignals(False)
+                self.ed_search.blockSignals(False)
+            except Exception:
+                pass
 
-        # vizuelni hint za nedostajući NOM (UX)
+        self._pending_preview_collapsed = bool(prev_coll)
+        self._pending_preview_width = int(prev_w_i)
+
+        if isinstance(splitter_state, (QByteArray, bytes)):
+            self._pending_splitter_state = splitter_state if isinstance(splitter_state, QByteArray) else QByteArray(splitter_state)
+
+        if wire_columns is None and isinstance(hdr_state, (QByteArray, bytes)):
+            self._pending_header_state = hdr_state if isinstance(hdr_state, QByteArray) else QByteArray(hdr_state)
+
         try:
-            lb_nom = self._fields.get("nomenclature")
-            if lb_nom:
-                if nom:
-                    lb_nom.setStyleSheet("")
-                    lb_nom.setToolTip("")
-                else:
-                    lb_nom.setStyleSheet("color: #ff8a80; font-weight: 600;")
-                    lb_nom.setToolTip("Nomenklaturni broj nije unet.")
+            order_enum = Qt.SortOrder(sort_ord_i)
+        except Exception:
+            order_enum = Qt.AscendingOrder
+        self._pending_sort = (sort_col_i, order_enum)
+
+        try:
+            self._rebuild_chips()
         except Exception:
             pass
 
-    def _copy_uid(self) -> None:
-        uid = (self._current_uid or "").strip()
+    def _apply_pending_layout_restore(self) -> None:
+        try:
+            if self._pending_splitter_state is not None:
+                self.splitter.restoreState(self._pending_splitter_state)
+        except Exception:
+            pass
+        self._pending_splitter_state = None
+
+        try:
+            if self._pending_header_state is not None and wire_columns is None:
+                self.table.horizontalHeader().restoreState(self._pending_header_state)
+        except Exception:
+            pass
+        self._pending_header_state = None
+
+        try:
+            total = max(1, int(self.splitter.width()))
+            if self._pending_preview_collapsed is True:
+                self._preview_collapsed = True
+                self.preview.set_collapsed(True)
+                right = self.preview.collapsed_width()
+                self.splitter.setSizes([max(1, total - right), right])
+            else:
+                self._preview_collapsed = False
+                self.preview.set_collapsed(False)
+                right = int(self._pending_preview_width or self.preview.expanded_width_hint())
+                right = min(max(self.preview.collapsed_width(), right), max(1, total - 1))
+                self.splitter.setSizes([max(1, total - right), right])
+        except Exception:
+            pass
+        self._pending_preview_collapsed = None
+        self._pending_preview_width = None
+
+    # -------------------- RBAC / chips / selection / menu / shortcuts --------------------
+    def _default_scope(self) -> str:
+        try:
+            return str(self.cb_scope.itemText(0) or "")
+        except Exception:
+            return ""
+
+    def _apply_rbac(self) -> None:
+        self._has_full_view = _can(PERM_ASSETS_VIEW)
+        self._has_my_view = _can(PERM_ASSETS_MY_VIEW)
+        self._has_metro_view = _can(PERM_ASSETS_METRO_VIEW)
+        self._has_any_view = self._has_full_view or self._has_my_view or self._has_metro_view
+
+        try:
+            self.cb_scope.blockSignals(True)
+            self.cb_scope.clear()
+            if self._has_full_view:
+                self.cb_scope.addItem(self.SCOPE_ALL)
+            if self._has_my_view:
+                self.cb_scope.addItem(self.SCOPE_MY)
+            if self._has_metro_view:
+                self.cb_scope.addItem(self.SCOPE_METRO)
+            if self.cb_scope.count() == 0:
+                self.cb_scope.addItem(self.SCOPE_MY)
+        finally:
+            try:
+                self.cb_scope.blockSignals(False)
+            except Exception:
+                pass
+
+        if not self._has_any_view:
+            self.lb_rbac.setText(
+                "Nemaš pravo da vidiš stranu 'Sredstva' "
+                "(potrebno je assets.view ili assets.my.view ili assets.metrology.view)."
+            )
+            self.lb_rbac.show()
+            for w in (self.tabs, self.cb_scope, self.ed_search, self.cb_category, self.cb_status,
+                      self.btn_search, self.btn_refresh, self.btn_columns, self.btn_detail, self.btn_new,
+                      self.table, self.quick_tools, self.preview, self.splitter, self.chips):
+                try:
+                    w.setEnabled(False)
+                except Exception:
+                    pass
+            return
+
+        ok_create = _can(PERM_ASSETS_CREATE)
+        self.btn_new.setEnabled(bool(ok_create))
+        self.lb_rbac.hide()
+
+    def _rebuild_chips(self) -> None:
+        chips: List[ChipSpec] = []
+
+        try:
+            tab_txt = self.tabs.tabText(self.tabs.currentIndex())
+            if tab_txt and tab_txt != self.TAB_ACTIVE:
+                chips.append(ChipSpec(text=f"Tab: {tab_txt}", on_remove=lambda: self.tabs.setCurrentIndex(0)))
+        except Exception:
+            pass
+
+        try:
+            sc = str(self.cb_scope.currentText() or "")
+            if sc and sc != self._default_scope():
+                chips.append(ChipSpec(text=f"Opseg: {sc}", on_remove=lambda: self.cb_scope.setCurrentIndex(0)))
+        except Exception:
+            pass
+
+        try:
+            cat = str(self.cb_category.currentText() or "SVE")
+            if cat.upper() != "SVE":
+                chips.append(ChipSpec(
+                    text=f"Kategorija: {cat}",
+                    on_remove=lambda: self.cb_category.setCurrentIndex(max(0, self.cb_category.findText("SVE", Qt.MatchFixedString))),
+                ))
+        except Exception:
+            pass
+
+        try:
+            st = str(self.cb_status.currentText() or "SVE")
+            if st.upper() != "SVE":
+                chips.append(ChipSpec(
+                    text=f"Status: {st}",
+                    on_remove=lambda: self.cb_status.setCurrentIndex(max(0, self.cb_status.findText("SVE", Qt.MatchFixedString))),
+                ))
+        except Exception:
+            pass
+
+        try:
+            q = str(self.ed_search.text() or "").strip()
+            if q:
+                chips.append(ChipSpec(text=f"Pretraga: {q}", on_remove=lambda: self.ed_search.setText(""), tooltip="DB pretraga"))
+        except Exception:
+            pass
+
+        self.chips.set_chips(chips)
+
+    def _clear_all_filters(self) -> None:
+        try:
+            self.tabs.setCurrentIndex(0)
+            self.cb_scope.setCurrentIndex(0)
+            self.cb_category.setCurrentIndex(max(0, self.cb_category.findText("SVE", Qt.MatchFixedString)))
+            self.cb_status.setCurrentIndex(max(0, self.cb_status.findText("SVE", Qt.MatchFixedString)))
+            self.ed_search.setText("")
+        except Exception:
+            pass
+        self._state_dirty()
+        self.request_reload()
+
+    def _current_row_any(self) -> int:
+        r = self.table.currentRow()
+        if r >= 0:
+            return r
+        try:
+            sm = self.table.selectionModel()
+            if sm:
+                idx = sm.selectedIndexes()
+                if idx:
+                    return idx[0].row()
+        except Exception:
+            pass
+        return -1
+
+    def _selected_uid(self) -> str:
+        row = self._current_row_any()
+        if row < 0:
+            return ""
+        it = self.table.item(row, self.COL_IDX_UID)
+        return it.text().strip() if it else ""
+
+    def _sync_buttons(self) -> None:
+        try:
+            self.btn_detail.setEnabled(self._has_any_view and (self._current_row_any() >= 0))
+        except Exception:
+            pass
+
+    def _rowdata_from_row(self, row: int) -> Dict[str, Any]:
+        it_uid = self.table.item(row, self.COL_IDX_UID)
+        if it_uid:
+            try:
+                d = it_uid.data(Qt.UserRole)
+                if isinstance(d, dict):
+                    return d
+            except Exception:
+                pass
+
+        def txt(c: int) -> str:
+            it = self.table.item(row, c)
+            return it.text().strip() if it else ""
+
+        return {
+            "asset_uid": txt(self.COL_IDX_UID),
+            "rb": txt(self.COL_IDX_ROWNUM),
+            "toc_number": txt(self.COL_IDX_TOC),
+            "nomenclature_number": txt(self.COL_IDX_NOM),
+            "serial_number": txt(self.COL_IDX_SN),
+            "name": txt(self.COL_IDX_NAME),
+            "category": txt(self.COL_IDX_CAT),
+            "status": txt(self.COL_IDX_STATUS),
+            "current_holder": txt(self.COL_IDX_HOLDER),
+            "location": txt(self.COL_IDX_LOC),
+            "updated_at": txt(self.COL_IDX_UPD),
+        }
+
+    def _on_selection_changed(self) -> None:
+        if self._loading:
+            return
+        row = self._current_row_any()
+        if row >= 0:
+            self.preview.set_asset(self._rowdata_from_row(row))
+        else:
+            self.preview.clear()
+        self._sync_buttons()
+
+    def _install_context_menu(self) -> None:
+        try:
+            self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.table.customContextMenuRequested.connect(self._on_table_context_menu)
+        except Exception:
+            pass
+
+    def _on_table_context_menu(self, pos) -> None:
+        # context menu should act on clicked cell
+        try:
+            idx = self.table.indexAt(pos)
+            if idx.isValid():
+                self.table.setCurrentCell(idx.row(), max(0, idx.column()))
+        except Exception:
+            pass
+
+        row = self._current_row_any()
+        uid = self._selected_uid()
+
+        m = QMenu(self.table)
+        a_open = m.addAction("Otvori detalje")
+        a_copy_uid = m.addAction("Kopiraj UID")
+        m.addSeparator()
+        a_refresh = m.addAction("Osveži")
+
+        if row < 0:
+            a_open.setEnabled(False)
+            a_copy_uid.setEnabled(False)
+        if not uid:
+            a_copy_uid.setEnabled(False)
+
+        act = m.exec(self.table.viewport().mapToGlobal(pos))
+        if act == a_open:
+            self.open_selected_detail()
+        elif act == a_copy_uid:
+            try:
+                QApplication.clipboard().setText(uid)
+            except Exception:
+                pass
+        elif act == a_refresh:
+            self.request_reload()
+
+    def _install_shortcuts(self) -> None:
+        # Global shortcuts
+        def mk(seq: str, fn, parent: QWidget, ctx: Qt.ShortcutContext) -> None:
+            try:
+                sc = QShortcut(QKeySequence(seq), parent)
+                sc.setContext(ctx)
+                sc.activated.connect(fn)
+            except Exception:
+                pass
+
+        mk("Ctrl+R", self.request_reload, parent=self, ctx=Qt.WindowShortcut)
+        mk("Ctrl+F", lambda: self.ed_search.setFocus(), parent=self, ctx=Qt.WindowShortcut)
+        mk("Ctrl+Shift+C", self._copy_selected_uid, parent=self, ctx=Qt.WindowShortcut)
+
+        # ✅ Enter/Return only on TABLE (won't steal search field Enter)
+        mk("Return", self.open_selected_detail, parent=self.table, ctx=Qt.WidgetShortcut)
+        mk("Enter", self.open_selected_detail, parent=self.table, ctx=Qt.WidgetShortcut)
+
+    def _copy_selected_uid(self) -> None:
+        uid = self._selected_uid()
         if not uid:
             return
         try:
@@ -884,1016 +1190,840 @@ class AssetPreviewPanel(QFrame):
         except Exception:
             pass
 
-# (FILENAME: ui/assets_page.py - END PART 1)
-# FILENAME: ui/assets_page.py
-
-# -*- coding: utf-8 -*-
-# FILENAME: ui/assets_page.py
-# (FILENAME: ui/assets_page.py - START PART 2)
-
-# -------------------- AssetsPage --------------------
-class AssetsPage(QWidget):
-    """
-    Sredstva — glavna stranica (FULL UI).
-    - RBAC fail-closed: ako nema view permisije, ne učitava podatke.
-    - Scope: ALL / MY / METRO (ako user ima relevantne permisije).
-    - Tabovi: Aktivna / Bez zaduženja / Rashodovana / Sva (lokalna logika filtera)
-    - Desni preview panel + “Otvori detalje”.
-    - Persist stanja preko QSettings.
-    """
-
-    MAX_ROWS = 5000
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.log = logging.getLogger("ui.assets_page")
-        self._dark = _is_dark_theme()
-
-        # data
-        self._rows: List[Dict[str, Any]] = []
-        self._view_rows: List[Dict[str, Any]] = []
-        self._selected_uid: str = ""
-
-        # flags
-        self._loading = False
-        self._header_state_applied = False
-
-        # RBAC
-        self._can_view_all = _can(PERM_ASSETS_VIEW)
-        self._can_view_my = _can(PERM_ASSETS_MY_VIEW)
-        self._can_view_metro = _can(PERM_ASSETS_METRO_VIEW)
-        self._can_create = _can(PERM_ASSETS_CREATE)
-
-        # UI
-        self._build_ui()
-        self._wire_events()
-
-        # restore + initial load
-        QTimer.singleShot(0, self._restore_state)
-        QTimer.singleShot(0, self.reload)
-
-    # -------------------- settings --------------------
-    def _profile_key(self) -> str:
-        """
-        Multi-role support: probaj da uzmeš aktivni profil/rolu iz session-a,
-        pa kombinuješ sa actor_key da state bude stabilan per user+role.
-        """
-        ak = _actor_key() or _actor_name()
-        rk = ""
+    # -------------------- reload debounce --------------------
+    def _on_reload_timeout(self) -> None:
         try:
-            from core.session import active_role_key  # type: ignore
-            rk = (active_role_key() or "").strip()
+            self.load_assets()
         except Exception:
-            rk = ""
-        if not rk:
             try:
-                from core.session import active_role_name  # type: ignore
-                rk = (active_role_name() or "").strip()
-            except Exception:
-                rk = ""
-        rk = rk or "default"
-        return f"{ak}__{rk}"
-
-    def _sprefix(self) -> str:
-        return f"assets_page/{self._profile_key()}"
-
-    def _persist_state(self) -> None:
-        try:
-            s = _settings()
-            p = self._sprefix()
-
-            s.setValue(f"{p}/tab_index", int(self.tabs.currentIndex()))
-            s.setValue(f"{p}/scope", int(self.cmb_scope.currentIndex()))
-            s.setValue(f"{p}/category", int(self.cmb_category.currentIndex()))
-            s.setValue(f"{p}/status", int(self.cmb_status.currentIndex()))
-            s.setValue(f"{p}/search", self.ed_search.text().strip())
-
-            s.setValue(f"{p}/preview_collapsed", bool(self.preview_is_collapsed()))
-            try:
-                s.setValue(f"{p}/splitter", self.splitter.saveState())
+                self.logger.exception("AssetsPage: reload failed")
             except Exception:
                 pass
 
-            # sort
-            try:
-                hdr = self.table.horizontalHeader()
-                s.setValue(f"{p}/sort_col", int(hdr.sortIndicatorSection()))
-                s.setValue(f"{p}/sort_ord", int(hdr.sortIndicatorOrder()))
-            except Exception:
-                pass
-
-            # header columns state (width/order)
-            try:
-                s.setValue(f"{p}/header_state", self.table.horizontalHeader().saveState())
-            except Exception:
-                pass
-
-            s.sync()
-        except Exception:
+    def request_reload(self) -> None:
+        if not self._has_any_view:
             return
-
-    def _restore_state(self) -> None:
         try:
-            s = _settings()
-            p = self._sprefix()
-
-            with _SignalBlock(self.tabs, self.cmb_scope, self.cmb_category, self.cmb_status, self.ed_search):
-                self.tabs.setCurrentIndex(int(s.value(f"{p}/tab_index", 0)))
-                self.cmb_scope.setCurrentIndex(int(s.value(f"{p}/scope", 0)))
-                self.cmb_category.setCurrentIndex(int(s.value(f"{p}/category", 0)))
-                self.cmb_status.setCurrentIndex(int(s.value(f"{p}/status", 0)))
-                self.ed_search.setText(str(s.value(f"{p}/search", "")) or "")
-
-            # preview collapsed
-            try:
-                collapsed = bool(s.value(f"{p}/preview_collapsed", False))
-                self._set_preview_collapsed(collapsed, animate=False)
-            except Exception:
-                pass
-
-            # splitter
-            try:
-                st = s.value(f"{p}/splitter", None)
-                if isinstance(st, (QByteArray, bytes, bytearray)):
-                    self.splitter.restoreState(QByteArray(st))
-            except Exception:
-                pass
-
-            # sort
-            try:
-                col = int(s.value(f"{p}/sort_col", 0))
-                ordv = int(s.value(f"{p}/sort_ord", int(Qt.AscendingOrder)))
-                self.table.horizontalHeader().setSortIndicator(col, Qt.SortOrder(ordv))
-            except Exception:
-                pass
-
-            # header state (apply later, posle wire_columns ako postoji)
-            try:
-                self._saved_header_state = s.value(f"{p}/header_state", None)
-            except Exception:
-                self._saved_header_state = None
-
+            self._rebuild_chips()
         except Exception:
-            self._saved_header_state = None
-
-    def closeEvent(self, event) -> None:
-        self._persist_state()
-        super().closeEvent(event)
-
-    # -------------------- UI --------------------
-    def _build_ui(self) -> None:
-        self.banner = QLabel()
-        self.banner.setWordWrap(True)
-        self.banner.setStyleSheet(_qss_banner(self._dark))
-
-        # scope options (RBAC-driven)
-        self.cmb_scope = QComboBox()
-        self._scope_items: List[Tuple[str, str]] = []  # (key, label)
-
-        # default scope order: ALL -> MY -> METRO
-        if self._can_view_all:
-            self._scope_items.append(("ALL", "Sva sredstva"))
-        if self._can_view_my:
-            self._scope_items.append(("MY", "Moja sredstva"))
-        if self._can_view_metro:
-            self._scope_items.append(("METRO", "Metrologija"))
-        if not self._scope_items:
-            # fail-closed: nema scope opcija, ali UI mora da živi
-            self._scope_items.append(("NONE", "Nema pristup"))
-
-        for _, label in self._scope_items:
-            self.cmb_scope.addItem(label)
-
-        self.cmb_category = QComboBox()
-        self.cmb_category.addItem("Sve kategorije")
-
-        self.cmb_status = QComboBox()
-        self.cmb_status.addItem("Svi statusi")
-
-        self.ed_search = QLineEdit()
-        self.ed_search.setPlaceholderText("Pretraga (UID, RB, TOC, naziv, serijski, zaduženje...)")
-
-        self.btn_refresh = QPushButton("Osveži")
-        self.btn_new = QPushButton("Novo sredstvo")
-        self.btn_new.setEnabled(bool(self._can_create))
-
-        # tabs (filter mode)
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        for t in ("Aktivna", "Bez zaduženja", "Rashodovana", "Sva"):
-            self.tabs.addTab(QWidget(), t)
-
-        # chips
-        self.chips = FilterChipsBar(self)
-        self.chips.set_clear_all_handler(self._clear_all_filters)
-
-        # table
-        self.table = QTableWidget(0, 10)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
-        self.table.setSortingEnabled(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.table.horizontalHeader().setStretchLastSection(True)
-
-        headers = [
-            "UID",
-            "RB",
-            "TOC",
-            "NOM",
-            "Naziv",
-            "Kategorija",
-            "Status",
-            "Zaduženo kod",
-            "Lokacija",
-            "Ažurirano",
-        ]
-        self.table.setHorizontalHeaderLabels(headers)
-
-        # row tint delegate (status col index = 6)
-        self._install_row_tint()
-
-        # empty state label
-        self.lbl_empty = QLabel("Nema rezultata za izabrane filtere.")
-        self.lbl_empty.setAlignment(Qt.AlignCenter)
-        self.lbl_empty.setStyleSheet(_qss_empty(self._dark))
-        self.lbl_empty.hide()
-
-        # preview
-        self.preview = AssetPreviewPanel(self)
-        self.preview.set_toggle_handler(self.toggle_preview)
-        self.preview.set_open_handler(self.open_selected_asset)
-
-        # splitter
-        self.splitter = QSplitter(Qt.Horizontal, self)
-        left = QWidget(self)
-        left_lay = QVBoxLayout(left)
-        left_lay.setContentsMargins(0, 0, 0, 0)
-        left_lay.setSpacing(8)
-
-        # top controls row
-        row1 = QHBoxLayout()
-        row1.setContentsMargins(0, 0, 0, 0)
-        row1.setSpacing(8)
-        row1.addWidget(QLabel("Scope:"), 0)
-        row1.addWidget(self.cmb_scope, 0)
-        row1.addWidget(QLabel("Kategorija:"), 0)
-        row1.addWidget(self.cmb_category, 0)
-        row1.addWidget(QLabel("Status:"), 0)
-        row1.addWidget(self.cmb_status, 0)
-        row1.addStretch(1)
-        row1.addWidget(self.btn_refresh, 0)
-        row1.addWidget(self.btn_new, 0)
-
-        row2 = QHBoxLayout()
-        row2.setContentsMargins(0, 0, 0, 0)
-        row2.setSpacing(8)
-        row2.addWidget(self.ed_search, 1)
-
-        left_lay.addWidget(self.banner, 0)
-        left_lay.addWidget(self.tabs, 0)
-        left_lay.addLayout(row1, 0)
-        left_lay.addLayout(row2, 0)
-        left_lay.addWidget(self.chips, 0)
-        left_lay.addWidget(self.table, 1)
-        left_lay.addWidget(self.lbl_empty, 0)
-
-        self.splitter.addWidget(left)
-        self.splitter.addWidget(self.preview)
-        self.splitter.setStretchFactor(0, 1)
-        self.splitter.setStretchFactor(1, 0)
-
-        # main layout
-        root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(10)
-        root.addWidget(self.splitter, 1)
-
-        # optional helpers
-        if wire_table_selection_plus_copy:
-            try:
-                wire_table_selection_plus_copy(self.table)
-            except Exception:
-                pass
-
-        self._apply_banner()
-
-    def _apply_banner(self) -> None:
-        if not (self._can_view_all or self._can_view_my or self._can_view_metro):
-            self.banner.setText("⛔ Nemaš pravo pristupa listi sredstava (RBAC).")
-            self.table.setEnabled(False)
-            self.btn_refresh.setEnabled(False)
-            self.btn_new.setEnabled(False)
-        else:
-            # friendly info + cap note
-            cap = self.MAX_ROWS
-            self.banner.setText(f"📦 Prikaz liste sredstava (limit: prvih {cap}). Filteri su lokalni + bezbedni (offline).")
-            self.table.setEnabled(True)
-            self.btn_refresh.setEnabled(True)
-            self.btn_new.setEnabled(bool(self._can_create))
-
-    def _install_row_tint(self) -> None:
-        dark = self._dark
-        # status palette (accent, tint)
-        palette: Dict[str, Tuple[QColor, QColor]] = {
-            "active": (QColor("#2dd4bf"), QColor(45, 212, 191, 18) if dark else QColor(45, 212, 191, 28)),
-            "on_loan": (QColor("#60a5fa"), QColor(96, 165, 250, 16) if dark else QColor(96, 165, 250, 26)),
-            "service": (QColor("#fbbf24"), QColor(251, 191, 36, 18) if dark else QColor(251, 191, 36, 28)),
-            "scrapped": (QColor("#fb7185"), QColor(251, 113, 133, 16) if dark else QColor(251, 113, 133, 26)),
-            "unknown": (QColor("#a0a6b6"), QColor(160, 166, 182, 10) if dark else QColor(160, 166, 182, 18)),
-        }
+            pass
         try:
-            self._tint_delegate = _AssetsRowTintDelegate(self.table, status_col=6, palette=palette, accent_px=3)
-            self.table.setItemDelegate(self._tint_delegate)
+            self._reload_timer.start()
         except Exception:
-            self._tint_delegate = None
+            self._on_reload_timeout()
 
-    # -------------------- events --------------------
-    def _wire_events(self) -> None:
-        self.btn_refresh.clicked.connect(self.reload)
-        self.btn_new.clicked.connect(self.create_new_asset)
+# (FILENAME: ui/assets_page.py - END PART 2/3)
 
-        self.tabs.currentChanged.connect(lambda _i: self._on_filters_changed())
-        self.cmb_scope.currentIndexChanged.connect(lambda _i: self._on_scope_changed())
-        self.cmb_category.currentIndexChanged.connect(lambda _i: self._on_filters_changed())
-        self.cmb_status.currentIndexChanged.connect(lambda _i: self._on_filters_changed())
+# FILENAME: ui/assets_page.py
+# (FILENAME: ui/assets_page.py - START PART 3/3)
 
-        self.ed_search.textChanged.connect(lambda _t: self._on_filters_changed(debounce=True))
-
-        self.table.itemSelectionChanged.connect(self._on_selection_changed)
-        self.table.customContextMenuRequested.connect(self._on_context_menu)
-
-        # debounce timer for search (UX)
-        self._debounce = QTimer(self)
-        self._debounce.setSingleShot(True)
-        self._debounce.setInterval(180)
-        self._debounce.timeout.connect(self.apply_filters)
-
-    # -------------------- scope/filter --------------------
-    def current_scope_key(self) -> str:
-        idx = max(0, int(self.cmb_scope.currentIndex()))
+    # -------------------- tab/scope/filter helpers --------------------
+    def _active_tab_name(self) -> str:
         try:
-            return self._scope_items[idx][0]
+            return self.tabs.tabText(self.tabs.currentIndex())
         except Exception:
-            return "NONE"
+            return self.TAB_ACTIVE
 
-    def current_tab_key(self) -> str:
-        idx = int(self.tabs.currentIndex())
-        if idx == 0:
-            return "ACTIVE"
-        if idx == 1:
-            return "UNASSIGNED"
-        if idx == 2:
-            return "SCRAPPED"
-        return "ALL"
+    def _apply_tab_filter(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        tab = self._active_tab_name()
+        if tab == self.TAB_ACTIVE:
+            return [r for r in rows if _status_key(r.get("status")) != "scrapped"]
+        if tab == self.TAB_UNASSIGNED:
+            out: List[Dict[str, Any]] = []
+            for r in rows:
+                if _status_key(r.get("status")) == "scrapped":
+                    continue
+                holder = _norm(r.get("current_holder") or r.get("assigned_to") or "")
+                if not holder:
+                    out.append(r)
+            return out
+        if tab == self.TAB_SCRAPPED:
+            return [r for r in rows if _status_key(r.get("status")) == "scrapped"]
+        return rows
 
-    def _clear_all_filters(self) -> None:
-        with _SignalBlock(self.cmb_category, self.cmb_status, self.ed_search, self.tabs):
-            self.tabs.setCurrentIndex(0)
-            self.cmb_category.setCurrentIndex(0)
-            self.cmb_status.setCurrentIndex(0)
-            self.ed_search.setText("")
-        self.apply_filters()
+    def _scope_name(self) -> str:
+        try:
+            return (self.cb_scope.currentText() or "").strip()
+        except Exception:
+            return self.SCOPE_ALL
 
-    def _on_scope_changed(self) -> None:
-        # scope change -> reload from service (different dataset)
-        self.reload()
+    def _cat_match(self, selected_cat: str, value_cat: Any) -> bool:
+        sc = (selected_cat or "").strip().casefold()
+        vc = _norm(value_cat).casefold()
+        if sc in ("", "sve"):
+            return True
+        if sc == "it":
+            return ("it" in vc) or (vc == "it")
+        if sc == "metrologija":
+            return "metrolog" in vc
+        if sc == "os":
+            return vc == "os" or "osnov" in vc
+        if sc == "si":
+            return vc == "si" or "sitan" in vc
+        if sc == "zalihe":
+            return "zaliha" in vc
+        if sc == "ostalo":
+            return True
+        return vc == sc
 
-    def _on_filters_changed(self, debounce: bool = False) -> None:
-        if debounce:
-            self._debounce.start()
-        else:
-            self.apply_filters()
-
-    def _build_chips(self) -> List[ChipSpec]:
-        chips: List[ChipSpec] = []
-
-        # tab
-        tab = self.current_tab_key()
-        tab_label = {0: "Aktivna", 1: "Bez zaduženja", 2: "Rashodovana", 3: "Sva"}.get(self.tabs.currentIndex(), "Sva")
-        if tab != "ACTIVE":
-            chips.append(ChipSpec(
-                text=f"Tab: {tab_label}",
-                on_remove=lambda: self.tabs.setCurrentIndex(0),
-                tooltip="Klik na X vraća tab na Aktivna",
-            ))
-
-        # category
-        if self.cmb_category.currentIndex() > 0:
-            chips.append(ChipSpec(
-                text=f"Kategorija: {self.cmb_category.currentText()}",
-                on_remove=lambda: self.cmb_category.setCurrentIndex(0),
-            ))
-
-        # status
-        if self.cmb_status.currentIndex() > 0:
-            chips.append(ChipSpec(
-                text=f"Status: {self.cmb_status.currentText()}",
-                on_remove=lambda: self.cmb_status.setCurrentIndex(0),
-            ))
-
-        # search
-        q = self.ed_search.text().strip()
-        if q:
-            chips.append(ChipSpec(
-                text=f"Pretraga: {q}",
-                on_remove=lambda: self.ed_search.setText(""),
-            ))
-
-        return chips
-
-    # -------------------- service calls --------------------
-    def _svc_list(self, scope_key: str) -> List[Dict[str, Any]]:
+    def _apply_local_filters(self, rows: List[Dict[str, Any]], *, apply_search: bool = True) -> List[Dict[str, Any]]:
         """
-        Best-effort wrapper — podrži različite potpise list_assets_brief/list_assets.
-        Vraća listu dict-ova.
+        UI backstop filteri:
+        - category/status uvek (brzo i stabilno)
+        - search opciono (kad je DB već filtrirao)
         """
-        limit = int(self.MAX_ROWS)
-        # prefer brief
-        try:
-            # najčešći slučaj: list_assets_brief(scope="MY"/"ALL"/"METRO", limit=N)
-            return [ _row_as_dict(x) for x in (list_assets_brief(scope=scope_key, limit=limit) or []) ]
-        except Exception:
-            pass
-
-        try:
-            # varijanta: list_assets_brief(limit=N, scope=...)
-            return [ _row_as_dict(x) for x in (list_assets_brief(limit=limit, scope=scope_key) or []) ]
-        except Exception:
-            pass
-
-        try:
-            # fallback: list_assets(scope, limit)
-            return [ _row_as_dict(x) for x in (list_assets(scope=scope_key, limit=limit) or []) ]
-        except Exception:
-            pass
-
-        try:
-            # fallback: list_assets(limit)
-            return [ _row_as_dict(x) for x in (list_assets(limit=limit) or []) ]
-        except Exception:
-            pass
-
-        try:
-            # last resort: list_assets()
-            return [ _row_as_dict(x) for x in (list_assets() or []) ]
-        except Exception:
+        if not rows:
             return []
 
-    # -------------------- load + apply --------------------
-    def reload(self) -> None:
-        if self._loading:
+        try:
+            cat = _norm(self.cb_category.currentText() or "SVE")
+        except Exception:
+            cat = "SVE"
+
+        try:
+            st = _norm(self.cb_status.currentText() or "SVE")
+        except Exception:
+            st = "SVE"
+
+        q = ""
+        if apply_search:
+            try:
+                q = _cf(self.ed_search.text())
+            except Exception:
+                q = ""
+
+        out = rows
+
+        # category
+        try:
+            if cat and cat.upper() != "SVE":
+                out = [r for r in out if self._cat_match(cat, (r or {}).get("category", ""))]
+        except Exception:
+            pass
+
+        # status
+        try:
+            if st and st.upper() != "SVE":
+                ss = st.casefold()
+                if ss == "scrapped":
+                    out = [r for r in out if _status_key((r or {}).get("status", "")) == "scrapped"]
+                else:
+                    out = [r for r in out if _norm((r or {}).get("status", "")).casefold() == ss]
+        except Exception:
+            pass
+
+        # search (optional)
+        if q:
+            def row_text(rr: Dict[str, Any]) -> str:
+                parts = [
+                    rr.get("rb", ""),
+                    rr.get("asset_uid", ""),
+                    rr.get("toc_number", ""),
+                    _get_nomenclature(rr),
+                    rr.get("serial_number", ""),
+                    rr.get("name", ""),
+                    rr.get("category", ""),
+                    rr.get("status", ""),
+                    rr.get("current_holder", ""),
+                    rr.get("location", ""),
+                ]
+                return " ".join(str(x or "") for x in parts).casefold()
+
+            try:
+                out = [r for r in out if q in row_text(r)]
+            except Exception:
+                return rows
+
+        return out
+
+    # -------------------- cell styles --------------------
+    def _apply_status_cell_style(self, item: QTableWidgetItem, status_raw: Any) -> None:
+        try:
+            key = _status_key(status_raw)
+            col = self._status_text_color.get(key, self._status_text_color.get("unknown", QColor("#b9beca")))
+            item.setTextAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+            item.setForeground(QBrush(col))
+            f = item.font()
+            f.setBold(True)
+            item.setFont(f)
+        except Exception:
+            pass
+
+    def _apply_nomenclature_cell_style(self, item: QTableWidgetItem, nom: str) -> None:
+        try:
+            if nom:
+                item.setToolTip("")
+                return
+            item.setToolTip("Nomenklaturni broj nije unet.")
+            f = item.font()
+            f.setBold(True)
+            item.setFont(f)
+            item.setForeground(QBrush(QColor("#ff8a80")))
+            item.setText("—")
+            item.setTextAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        except Exception:
+            pass
+
+    # -------------------- renumber helpers --------------------
+    def _rownum_sort_key(self, row: int) -> Optional[int]:
+        it = self.table.item(row, self.COL_IDX_ROWNUM)
+        if not it:
+            return None
+        try:
+            v = it.data(Qt.UserRole)
+            if isinstance(v, int):
+                return v
+            if isinstance(v, float):
+                return int(v)
+        except Exception:
+            pass
+        try:
+            t = (it.text() or "").strip()
+            return int(t) if t.isdigit() else None
+        except Exception:
+            return None
+
+    def _sync_vertical_header_numbers(self, mode: str = "view") -> None:
+        try:
+            vh = self.table.verticalHeader()
+            if not vh.isVisible():
+                return
+        except Exception:
             return
-        if not (self._can_view_all or self._can_view_my or self._can_view_metro):
-            self._rows = []
-            self._view_rows = []
-            self._render_table([])
+
+        rc = self.table.rowCount()
+        visible = 0
+        for r in range(rc):
+            if self.table.isRowHidden(r):
+                txt = ""
+            else:
+                if mode == "stable":
+                    key = self._rownum_sort_key(r)
+                    txt = str(int(key)) if key is not None else ""
+                else:
+                    visible += 1
+                    txt = str(visible)
+            try:
+                it = self.table.verticalHeaderItem(r)
+                if it is None:
+                    it = QTableWidgetItem(txt)
+                    self.table.setVerticalHeaderItem(r, it)
+                else:
+                    it.setText(txt)
+            except Exception:
+                pass
+
+    def _apply_rownum_text_from_userrole(self) -> None:
+        try:
+            rc = self.table.rowCount()
+            for r in range(rc):
+                it = self.table.item(r, self.COL_IDX_ROWNUM)
+                if it is None:
+                    continue
+                key = self._rownum_sort_key(r)
+                if key is None:
+                    continue
+                it.setText(str(int(key)))
+                it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        except Exception:
+            return
+        self._sync_vertical_header_numbers(mode="stable")
+
+    def _renumber_view_rows(self) -> None:
+        try:
+            if self._sort_col == self.COL_IDX_ROWNUM:
+                return
+
+            visible = 0
+            rc = self.table.rowCount()
+            for r in range(rc):
+                if self.table.isRowHidden(r):
+                    txt = ""
+                else:
+                    visible += 1
+                    txt = str(visible)
+
+                it = self.table.item(r, self.COL_IDX_ROWNUM)
+                if it is None or not isinstance(it, SortableItem):
+                    it = SortableItem("", 0)
+                    it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                    self.table.setItem(r, self.COL_IDX_ROWNUM, it)
+
+                it.setText(txt)
+                it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        except Exception:
+            pass
+        self._sync_vertical_header_numbers(mode="view")
+
+    def _on_sort_changed(self, col: int, order: Qt.SortOrder) -> None:
+        self._sort_col = int(col)
+        self._sort_order = order
+        self._state_dirty()
+        if self._sort_col == self.COL_IDX_ROWNUM:
+            QTimer.singleShot(0, self._apply_rownum_text_from_userrole)
+        else:
+            QTimer.singleShot(0, self._renumber_view_rows)
+
+    def _poll_hidden_for_renumber(self) -> None:
+        try:
+            rc = self.table.rowCount()
+            if rc <= 0:
+                return
+            if len(self._hidden_cache) != rc:
+                self._hidden_cache = [False] * rc
+
+            changed = False
+            for r in range(rc):
+                h = self.table.isRowHidden(r)
+                if self._hidden_cache[r] != h:
+                    self._hidden_cache[r] = h
+                    changed = True
+
+            if not changed:
+                return
+
+            if self._sort_col == self.COL_IDX_ROWNUM:
+                return
+
+            self._renumber_view_rows()
+        except Exception:
+            return
+
+    # -------------------- preview animation --------------------
+    def _anim_optimize_begin(self) -> None:
+        try:
+            hdr = self.table.horizontalHeader()
+            self._anim_saved_stretch_last = bool(hdr.stretchLastSection())
+            hdr.setStretchLastSection(False)
+        except Exception:
+            self._anim_saved_stretch_last = None
+
+        try:
+            self._anim_saved_vp_mode = self.table.viewportUpdateMode()
+            self.table.setViewportUpdateMode(QAbstractItemView.MinimalViewportUpdate)
+        except Exception:
+            self._anim_saved_vp_mode = None
+
+    def _anim_optimize_end(self) -> None:
+        try:
+            hdr = self.table.horizontalHeader()
+            if self._anim_saved_stretch_last is not None:
+                hdr.setStretchLastSection(bool(self._anim_saved_stretch_last))
+        except Exception:
+            pass
+
+        try:
+            if self._anim_saved_vp_mode is not None:
+                self.table.setViewportUpdateMode(self._anim_saved_vp_mode)
+        except Exception:
+            pass
+
+        self._anim_saved_stretch_last = None
+        self._anim_saved_vp_mode = None
+        self._anim_last_right = None
+
+    def _animate_splitter_right(
+        self,
+        start_right: int,
+        end_right: int,
+        duration_ms: int,
+        on_finished: Optional[Callable[[], None]] = None,
+    ) -> None:
+        try:
+            if self._preview_anim is not None:
+                try:
+                    self._preview_anim.stop()
+                except Exception:
+                    pass
+                self._preview_anim = None
+
+            self._anim_last_right = None
+            self._anim_optimize_begin()
+
+            anim = QVariantAnimation(self)
+            anim.setStartValue(int(start_right))
+            anim.setEndValue(int(end_right))
+            anim.setDuration(int(duration_ms))
+            anim.setEasingCurve(QEasingCurve.InOutSine)
+
+            def tick(val) -> None:
+                try:
+                    right = int(val)
+                    if self._anim_last_right is not None and abs(right - self._anim_last_right) < 3:
+                        return
+                    self._anim_last_right = right
+                    total = max(1, int(self.splitter.width()))
+                    left = max(1, total - right)
+                    self.splitter.setSizes([left, right])
+                except Exception:
+                    pass
+
+            def done() -> None:
+                try:
+                    self._preview_animating = False
+                    self.preview.set_toggle_enabled(True)
+                except Exception:
+                    pass
+                self._anim_optimize_end()
+                if on_finished:
+                    try:
+                        on_finished()
+                    except Exception:
+                        pass
+                self._state_dirty()
+
+            anim.valueChanged.connect(tick)
+            anim.finished.connect(done)
+            self._preview_anim = anim
+
+            self._preview_animating = True
+            self.preview.set_toggle_enabled(False)
+            anim.start()
+        except Exception:
+            try:
+                self._preview_animating = False
+                self.preview.set_toggle_enabled(True)
+            except Exception:
+                pass
+            self._anim_optimize_end()
+            if on_finished:
+                try:
+                    on_finished()
+                except Exception:
+                    pass
+            self._state_dirty()
+
+    def _toggle_preview(self) -> None:
+        if self._preview_animating:
+            return
+
+        sizes = self.splitter.sizes()
+        current_right = int(sizes[1] if sizes and len(sizes) >= 2 else self.preview.width())
+
+        if not self._preview_collapsed:
+            self._preview_last_w = max(current_right, self.preview.expanded_width_hint())
+            self._preview_collapsed = True
+
+            self.preview.set_collapsed(True)
+            self._animate_splitter_right(
+                start_right=current_right,
+                end_right=self.preview.collapsed_width(),
+                duration_ms=260,
+            )
+        else:
+            self._preview_collapsed = False
+            target = int(self._preview_last_w or self.preview.expanded_width_hint())
+            target = max(target, self.preview.expanded_width_hint())
+
+            self.preview.set_collapsed(False)
+            self._animate_splitter_right(
+                start_right=current_right,
+                end_right=target,
+                duration_ms=290,
+            )
+
+    # -------------------- data load --------------------
+    def load_assets(self) -> None:
+        if not self._has_any_view or self._loading:
+            return
+
+        if not callable(list_assets):
+            QMessageBox.critical(self, "Greška", "Servis list_assets nije dostupan.")
             return
 
         self._loading = True
-        self.banner.setText("⏳ Učitavam listu sredstava...")
+
+        selected_uid_before = self._selected_uid()
+        try:
+            scroll_before = int(self.table.verticalScrollBar().value())
+        except Exception:
+            scroll_before = None
+
+        # capture sort intent BEFORE disabling sorting
+        try:
+            hdr = self.table.horizontalHeader()
+            desired_col = int(hdr.sortIndicatorSection())
+            desired_order = hdr.sortIndicatorOrder()
+        except Exception:
+            desired_col = -1
+            desired_order = Qt.AscendingOrder
+
+        if self._pending_sort is not None:
+            desired_col, desired_order = self._pending_sort
+
+        scope = self._scope_name()
+        # fail-closed: if user doesn't have full view, ALL is not allowed even if UI restored it
+        if scope == self.SCOPE_ALL and not self._has_full_view:
+            scope = self._default_scope() or self.SCOPE_MY
+
+        limit = int(getattr(self, "MAX_ROWS", self._HARD_LIMIT) or self._HARD_LIMIT)
+        limit = max(100, min(limit, 50000))
 
         try:
-            scope_key = self.current_scope_key()
-            if scope_key == "NONE":
-                data = []
-            else:
-                data = self._svc_list(scope_key)
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+        except Exception:
+            pass
 
-            # enforce RBAC locally as backstop
-            if scope_key == "MY":
-                data = [r for r in data if _is_my_asset_ui(r)]
-            elif scope_key == "METRO":
-                data = [r for r in data if _is_metro_asset_ui(r)]
+        was_sorting = False
+        try:
+            was_sorting = bool(self.table.isSortingEnabled())
+            self.table.setSortingEnabled(False)
+        except Exception:
+            pass
 
-            self._rows = data[: self.MAX_ROWS]
-            self._hydrate_filter_sources()
-            self.apply_filters(keep_selection=True)
+        try:
+            # ---- fetch (robust signature; optional service-level scope if supported) ----
+            rows_any: List[Any] = []
+            used_service_scope = False
 
-            cap_note = ""
-            if len(data) > self.MAX_ROWS:
-                cap_note = f" (prikazano {self.MAX_ROWS} / {len(data)})"
+            # map UI scope to service-friendly values (best-effort)
+            service_scope = None
+            if scope == self.SCOPE_MY:
+                service_scope = "my"
+            elif scope == self.SCOPE_METRO:
+                service_scope = "metro"
 
-            self.banner.setText(f"✅ Učitano: {len(self._rows)} redova{cap_note}.")
+            # prefer keyword signature
+            try:
+                if service_scope:
+                    rows_any = list_assets(
+                        search=self.ed_search.text(),
+                        category=self.cb_category.currentText(),
+                        status=self.cb_status.currentText(),
+                        limit=limit,
+                        scope=service_scope,
+                    ) or []
+                    used_service_scope = True
+                else:
+                    rows_any = list_assets(
+                        search=self.ed_search.text(),
+                        category=self.cb_category.currentText(),
+                        status=self.cb_status.currentText(),
+                        limit=limit,
+                    ) or []
+            except TypeError:
+                # fallback legacy signature
+                try:
+                    rows_any = list_assets(
+                        self.ed_search.text(),
+                        self.cb_category.currentText(),
+                        self.cb_status.currentText(),
+                        limit,
+                    ) or []
+                except Exception:
+                    rows_any = list_assets(limit=limit) or []
+
+            # banner cap
+            try:
+                if isinstance(rows_any, list) and len(rows_any) >= limit:
+                    self.lb_info.setText(f"Prikazano je prvih {limit} rezultata. Suzi filtere za precizniji prikaz.")
+                    self.lb_info.show()
+                else:
+                    self.lb_info.hide()
+            except Exception:
+                pass
+
+            rows = [_row_as_dict(r) for r in (rows_any or [])]
+            rows = [r for r in rows if isinstance(r, dict) and r]
+
+            # tab filter
+            rows = self._apply_tab_filter(rows)
+
+            # ---- scope backstop (ALWAYS) ----
+            # if service didn't apply scope, we must apply here
+            if not used_service_scope:
+                if scope == self.SCOPE_MY:
+                    rows = [r for r in rows if _is_my_asset_ui(r)]
+                elif scope == self.SCOPE_METRO:
+                    rows = [r for r in rows if _is_metro_asset_ui(r)]
+
+            # ---- local backstop filters ----
+            # if we used keyword list_assets(search/category/status), DB likely already filtered;
+            # but keep local category/status as safety; avoid double search where possible
+            apply_search_local = not (
+                # DB-level filter is assumed when we used keyword path above
+                True
+            )
+            # practical: do NOT double-search; but keep local category/status always
+            rows = self._apply_local_filters(rows, apply_search=False)
+
+            try:
+                self.lb_empty.setVisible(len(rows) == 0)
+            except Exception:
+                pass
+
+            # ---- render ----
+            self.table.setUpdatesEnabled(False)
+            self.table.blockSignals(True)
+            try:
+                self.table.clearContents()
+                self.table.setRowCount(len(rows))
+                self._hidden_cache = [False] * len(rows)
+
+                self._sort_col = -1
+                self._sort_order = Qt.AscendingOrder
+
+                for i, r in enumerate(rows):
+                    stable_key = i + 1
+
+                    it0 = SortableItem(str(stable_key), stable_key)
+                    it0.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    it0.setFlags(it0.flags() & ~Qt.ItemIsEditable)
+                    self.table.setItem(i, self.COL_IDX_ROWNUM, it0)
+                    try:
+                        self.table.setVerticalHeaderItem(i, QTableWidgetItem(str(stable_key)))
+                    except Exception:
+                        pass
+
+                    uid = _norm(r.get("asset_uid", ""))
+                    it_uid = QTableWidgetItem(uid)
+                    it_uid.setFlags(it_uid.flags() & ~Qt.ItemIsEditable)
+                    try:
+                        it_uid.setData(Qt.UserRole, r)
+                    except Exception:
+                        pass
+                    self.table.setItem(i, self.COL_IDX_UID, it_uid)
+
+                    toc = _norm(r.get("toc_number", ""))
+                    it_toc = SortableItem(toc, _safe_int(toc) or 0)
+                    it_toc.setFlags(it_toc.flags() & ~Qt.ItemIsEditable)
+                    self.table.setItem(i, self.COL_IDX_TOC, it_toc)
+
+                    nom = _get_nomenclature(r)
+                    it_nom = SortableItem(nom, _safe_int(nom) or 0)
+                    it_nom.setFlags(it_nom.flags() & ~Qt.ItemIsEditable)
+                    self._apply_nomenclature_cell_style(it_nom, nom)
+                    self.table.setItem(i, self.COL_IDX_NOM, it_nom)
+
+                    it_sn = QTableWidgetItem(_norm(r.get("serial_number", "")))
+                    it_sn.setFlags(it_sn.flags() & ~Qt.ItemIsEditable)
+                    self.table.setItem(i, self.COL_IDX_SN, it_sn)
+
+                    it_name = QTableWidgetItem(_norm(r.get("name", "")))
+                    it_name.setFlags(it_name.flags() & ~Qt.ItemIsEditable)
+                    self.table.setItem(i, self.COL_IDX_NAME, it_name)
+
+                    it_cat = QTableWidgetItem(_norm(r.get("category", "")))
+                    it_cat.setFlags(it_cat.flags() & ~Qt.ItemIsEditable)
+                    self.table.setItem(i, self.COL_IDX_CAT, it_cat)
+
+                    st_raw = _norm(r.get("status", ""))
+                    it_status = QTableWidgetItem(st_raw)
+                    it_status.setFlags(it_status.flags() & ~Qt.ItemIsEditable)
+                    self._apply_status_cell_style(it_status, st_raw)
+                    self.table.setItem(i, self.COL_IDX_STATUS, it_status)
+
+                    it_holder = QTableWidgetItem(_norm(r.get("current_holder", "")))
+                    it_holder.setFlags(it_holder.flags() & ~Qt.ItemIsEditable)
+                    self.table.setItem(i, self.COL_IDX_HOLDER, it_holder)
+
+                    it_loc = QTableWidgetItem(_norm(r.get("location", "")))
+                    it_loc.setFlags(it_loc.flags() & ~Qt.ItemIsEditable)
+                    self.table.setItem(i, self.COL_IDX_LOC, it_loc)
+
+                    raw_upd = r.get("updated_at", "") or ""
+                    disp_upd = ""
+                    try:
+                        disp_upd = fmt_dt_sr(raw_upd)
+                    except Exception:
+                        disp_upd = _norm(raw_upd)
+                    it_upd = SortableItem(str(disp_upd), _safe_dt_sort_value(raw_upd) or 0)
+                    it_upd.setFlags(it_upd.flags() & ~Qt.ItemIsEditable)
+                    if raw_upd:
+                        it_upd.setToolTip(_norm(raw_upd))
+                    self.table.setItem(i, self.COL_IDX_UPD, it_upd)
+
+            finally:
+                self.table.blockSignals(False)
+                self.table.setUpdatesEnabled(True)
+
         except Exception as e:
-            self._rows = []
-            self._view_rows = []
-            self._render_table([])
-            self.banner.setText(f"⚠️ Greška pri učitavanju: {e}")
+            try:
+                self.logger.exception("AssetsPage.load_assets failed: %s", e)
+            except Exception:
+                pass
+            QMessageBox.critical(self, "Greška", f"Ne mogu da učitam sredstva.\n\n{e}")
+            return
         finally:
+            try:
+                self.table.setSortingEnabled(bool(was_sorting))
+            except Exception:
+                pass
+            try:
+                QApplication.restoreOverrideCursor()
+            except Exception:
+                pass
             self._loading = False
 
-    def _hydrate_filter_sources(self) -> None:
-        """
-        Popuni kategorije/status iz podataka — ali ne ruši postojeći izbor.
-        """
-        cats = sorted({ _norm(r.get("category", "")) for r in self._rows if _norm(r.get("category", "")) })
-        stats = sorted({ _norm(r.get("status", "")) for r in self._rows if _norm(r.get("status", "")) })
-
-        # preserve current selections
-        cur_cat = self.cmb_category.currentText()
-        cur_stat = self.cmb_status.currentText()
-
-        with _SignalBlock(self.cmb_category, self.cmb_status):
-            self.cmb_category.clear()
-            self.cmb_category.addItem("Sve kategorije")
-            for c in cats:
-                self.cmb_category.addItem(c)
-
-            self.cmb_status.clear()
-            self.cmb_status.addItem("Svi statusi")
-            for st in stats:
-                self.cmb_status.addItem(st)
-
-            # restore if possible
-            if cur_cat and cur_cat != "Sve kategorije":
-                i = self.cmb_category.findText(cur_cat)
-                if i >= 0:
-                    self.cmb_category.setCurrentIndex(i)
-
-            if cur_stat and cur_stat != "Svi statusi":
-                i = self.cmb_status.findText(cur_stat)
-                if i >= 0:
-                    self.cmb_status.setCurrentIndex(i)
-
-    def apply_filters(self, keep_selection: bool = True) -> None:
-        if self._loading:
-            return
-
-        tab = self.current_tab_key()
-        cat = self.cmb_category.currentText().strip()
-        st = self.cmb_status.currentText().strip()
-        q = self.ed_search.text().strip().casefold()
-
-        prev_uid = self._selected_uid if keep_selection else ""
-
-        def _match(r: Dict[str, Any]) -> bool:
-            if tab == "ACTIVE":
-                if _is_scrapped(r):
-                    return False
-            elif tab == "UNASSIGNED":
-                if _is_scrapped(r) or not _is_unassigned(r):
-                    return False
-            elif tab == "SCRAPPED":
-                if not _is_scrapped(r):
-                    return False
-
-            if self.cmb_category.currentIndex() > 0 and _norm(r.get("category", "")) != cat:
-                return False
-            if self.cmb_status.currentIndex() > 0 and _norm(r.get("status", "")) != st:
-                return False
-
-            if q:
-                hay = " | ".join([
-                    _norm(r.get("asset_uid", "")),
-                    _norm(r.get("rb", "")),
-                    _norm(r.get("toc_number", "")),
-                    _get_nomenclature(r),
-                    _norm(r.get("name", "")),
-                    _norm(r.get("serial_number", "")),
-                    _norm(r.get("current_holder", "")),
-                    _norm(r.get("location", "")),
-                    _norm(r.get("category", "")),
-                    _norm(r.get("status", "")),
-                ]).casefold()
-                return q in hay
-
-            return True
-
-        self._view_rows = [r for r in self._rows if _match(r)]
-        self._render_table(self._view_rows)
-
-        # chips
-        self.chips.set_chips(self._build_chips())
-
-        # restore selection if possible
-        if prev_uid:
-            self._select_uid(prev_uid)
-
-        self.lbl_empty.setVisible(len(self._view_rows) == 0)
-
-    # -------------------- table render --------------------
-    def _render_table(self, rows: List[Dict[str, Any]]) -> None:
-        self.table.setSortingEnabled(False)
+        # apply column prefs
         try:
-            self.table.setRowCount(0)
-            self.preview.clear()
+            self._apply_cols_assets()
         except Exception:
             pass
 
-        for r in (rows or []):
-            row_idx = self.table.rowCount()
-            self.table.insertRow(row_idx)
-
-            uid = _norm(r.get("asset_uid", ""))
-            rb = _norm(r.get("rb", ""))
-            toc = _norm(r.get("toc_number", ""))
-            nom = _get_nomenclature(r)
-            name = _norm(r.get("name", ""))
-            cat = _norm(r.get("category", ""))
-            status = _norm(r.get("status", ""))
-            holder = _norm(r.get("current_holder", ""))
-            loc = _norm(r.get("location", ""))
-            upd = fmt_dt_sr(r.get("updated_at", ""))
-
-            items: List[QTableWidgetItem] = [
-                SortableItem(uid, sort_value=uid),
-                SortableItem(rb, sort_value=rb),
-                SortableItem(toc, sort_value=_safe_int(toc) if _safe_int(toc) is not None else toc),
-                SortableItem(nom, sort_value=_safe_int(nom) if _safe_int(nom) is not None else nom),
-                SortableItem(name, sort_value=name.casefold()),
-                SortableItem(cat, sort_value=cat.casefold()),
-                SortableItem(status, sort_value=_status_key(status)),
-                SortableItem(holder, sort_value=holder.casefold()),
-                SortableItem(loc, sort_value=loc.casefold()),
-                SortableItem(upd, sort_value=_safe_dt_sort_value(r.get("updated_at", "")) or 0),
-            ]
-
-            for c, it in enumerate(items):
-                it.setData(Qt.UserRole + 1, uid)  # stash uid for quick access
-                self.table.setItem(row_idx, c, it)
-
-        # restore header state once
-        if not self._header_state_applied:
-            self._header_state_applied = True
-            self._apply_saved_header_state_once()
-
-        self.table.setSortingEnabled(True)
-        self._auto_select_first_if_needed()
-
-    def _apply_saved_header_state_once(self) -> None:
+        # apply sort every reload
         try:
-            st = getattr(self, "_saved_header_state", None)
-            if isinstance(st, (QByteArray, bytes, bytearray)):
-                self.table.horizontalHeader().restoreState(QByteArray(st))
-            elif isinstance(st, str) and st:
-                # some Qt versions serialize to str
-                self.table.horizontalHeader().restoreState(QByteArray(st.encode("utf-8")))
-        except Exception:
-            pass
-
-    def _auto_select_first_if_needed(self) -> None:
-        if self.table.rowCount() <= 0:
-            self._selected_uid = ""
-            self.preview.clear()
-            return
-        if self.table.currentRow() < 0:
-            self.table.selectRow(0)
-
-    def _selected_uid_from_table(self) -> str:
-        row = self.table.currentRow()
-        if row < 0:
-            return ""
-        try:
-            it = self.table.item(row, 0)
-            return _norm(it.text() if it else "")
-        except Exception:
-            return ""
-
-    def _select_uid(self, uid: str) -> None:
-        uid = (uid or "").strip()
-        if not uid:
-            return
-        for r in range(self.table.rowCount()):
-            it = self.table.item(r, 0)
-            if it and _norm(it.text()) == uid:
-                self.table.selectRow(r)
+            if was_sorting and 0 <= int(desired_col) < self.table.columnCount():
                 try:
-                    self.table.scrollToItem(it, QAbstractItemView.PositionAtCenter)
+                    self.table.horizontalHeader().setSortIndicator(int(desired_col), desired_order)
                 except Exception:
                     pass
-                return
-
-    def _on_selection_changed(self) -> None:
-        uid = self._selected_uid_from_table()
-        self._selected_uid = uid
-        if not uid:
-            self.preview.clear()
-            return
-
-        # find row data
-        rec = None
-        for r in self._view_rows:
-            if _norm(r.get("asset_uid", "")) == uid:
-                rec = r
-                break
-
-        if rec:
-            self.preview.set_asset(rec)
-        else:
-            self.preview.clear()
-
-    # -------------------- preview toggle --------------------
-    def preview_is_collapsed(self) -> bool:
-        try:
-            return bool(getattr(self.preview, "_collapsed", False))
+                try:
+                    self.table.sortItems(int(desired_col), desired_order)
+                except Exception:
+                    pass
+                self._sort_col = int(desired_col)
+                self._sort_order = desired_order
         except Exception:
-            return False
+            pass
+        finally:
+            self._pending_sort = None
 
-    def toggle_preview(self) -> None:
-        self._set_preview_collapsed(not self.preview_is_collapsed(), animate=True)
+        # renumber
+        if self._sort_col == self.COL_IDX_ROWNUM:
+            self._apply_rownum_text_from_userrole()
+        else:
+            self._renumber_view_rows()
 
-    def _set_preview_collapsed(self, collapsed: bool, animate: bool = True) -> None:
-        collapsed = bool(collapsed)
-        if not animate:
-            self.preview.set_collapsed(collapsed)
-            self._persist_state()
-            return
+        # restore selection by UID
+        restored = False
+        if selected_uid_before:
+            for r in range(self.table.rowCount()):
+                it = self.table.item(r, self.COL_IDX_UID)
+                if it and it.text().strip() == selected_uid_before:
+                    self.table.setCurrentCell(r, self.COL_IDX_UID)
+                    try:
+                        self.table.scrollToItem(it, QAbstractItemView.PositionAtCenter)
+                    except Exception:
+                        pass
+                    restored = True
+                    break
 
-        # animation: smooth width change (simple)
-        start = self.preview.width()
-        end = self.preview.collapsed_width() if collapsed else self.preview.expanded_width_hint()
-
-        self._anim = QVariantAnimation(self)
-        self._anim.setDuration(180)
-        self._anim.setEasingCurve(QEasingCurve.InOutQuad)
-        self._anim.setStartValue(start)
-        self._anim.setEndValue(end)
-
-        def _step(v: Any) -> None:
+        if not restored and scroll_before is not None:
             try:
-                w = int(v)
-                self.preview.setMinimumWidth(w)
-                if collapsed:
-                    self.preview.setMaximumWidth(w)
-                else:
-                    self.preview.setMaximumWidth(16777215)
+                self.table.verticalScrollBar().setValue(int(scroll_before))
             except Exception:
                 pass
 
-        def _done() -> None:
-            self.preview.set_collapsed(collapsed)
-            self._persist_state()
-
-        self._anim.valueChanged.connect(_step)
-        self._anim.finished.connect(_done)
-        self._anim.start()
-
-    # -------------------- context menu --------------------
-    def _on_context_menu(self, pos: QPoint) -> None:
-        if self.table.rowCount() <= 0:
-            return
-        row = self.table.currentRow()
-        if row < 0:
-            return
-        uid = self._selected_uid_from_table()
-        if not uid:
-            return
-
-        m = QMenu(self)
-        act_open = m.addAction("Otvori detalje")
-        act_copy = m.addAction("Kopiraj UID")
-        m.addSeparator()
-        act_refresh = m.addAction("Osveži listu")
-
-        act = m.exec(self.table.viewport().mapToGlobal(pos))
-        if act == act_open:
-            self.open_selected_asset()
-        elif act == act_copy:
-            try:
-                QApplication.clipboard().setText(uid)
-            except Exception:
-                pass
-        elif act == act_refresh:
-            self.reload()
+        self._sync_buttons()
+        self._on_selection_changed()
+        self._state_dirty()
 
     # -------------------- actions --------------------
-    def open_selected_asset(self) -> None:
-        uid = self._selected_uid or self._selected_uid_from_table()
-        uid = (uid or "").strip()
-        if not uid:
-            return
-        try:
-            dlg = AssetDetailDialog(asset_uid=uid, parent=self)
-            dlg.exec()
-        except Exception as e:
-            QMessageBox.warning(self, "Greška", f"Ne mogu da otvorim detalje sredstva.\n\n{e}")
-            return
-        # posle zatvaranja detalja — osveži (podrazumevano)
-        self.reload()
-
-    def create_new_asset(self) -> None:
-        if not self._can_create:
-            QMessageBox.information(self, "RBAC", "Nemaš pravo da kreiraš novo sredstvo.")
+    def new_asset(self) -> None:
+        if not _can(PERM_ASSETS_CREATE):
+            QMessageBox.warning(self, "Zabranjeno", "Nemaš pravo: assets.create.")
             return
 
-        dlg = NewAssetDialog(parent=self)
+        if NewAssetDialog is None or not callable(create_asset):
+            QMessageBox.critical(self, "Greška", "Nedostaje NewAssetDialog ili create_asset servis.")
+            return
+
+        dlg = NewAssetDialog(self)
         if dlg.exec() != QDialog.Accepted:
             return
 
-        # Best-effort izvlačenje podataka iz dialoga (razni API-ji kroz verzije)
         payload: Dict[str, Any] = {}
         try:
-            if hasattr(dlg, "get_payload"):
+            if hasattr(dlg, "get_payload") and callable(getattr(dlg, "get_payload")):
                 payload = dict(dlg.get_payload() or {})
+            elif hasattr(dlg, "values") and callable(getattr(dlg, "values")):
+                payload = dict(dlg.values() or {})
             elif hasattr(dlg, "payload"):
                 payload = dict(getattr(dlg, "payload") or {})
         except Exception:
             payload = {}
 
+        name = _norm(payload.get("name", ""))
+        if not name:
+            QMessageBox.warning(self, "Greška", "Naziv je obavezan.")
+            return
+
+        created = None
         try:
-            created = create_asset(actor=_actor_name(), **payload)
+            try:
+                created = create_asset(actor=_actor_name(), **payload)
+            except TypeError:
+                created = create_asset(**payload)
         except Exception as e:
-            QMessageBox.critical(self, "Greška", f"Kreiranje sredstva nije uspelo.\n\n{e}")
+            try:
+                self.logger.exception("AssetsPage.new_asset failed: %s", e)
+            except Exception:
+                pass
+            QMessageBox.critical(self, "Greška", f"Ne mogu da kreiram sredstvo.\n\n{e}")
             return
 
-        # created može biti dict ili uid
-        new_uid = ""
-        if isinstance(created, dict):
-            new_uid = _norm(created.get("asset_uid", ""))
-        else:
-            new_uid = _norm(created)
+        uid = _norm(created.get("asset_uid", "")) if isinstance(created, dict) else _norm(created)
 
-        # auto-zaduženje ako dialog daje info
+        # auto assignment (best-effort)
         try:
-            auto_holder = _norm(payload.get("auto_assign_to", "")) or _norm(payload.get("current_holder", ""))
-            auto_loc = _norm(payload.get("auto_location", "")) or _norm(payload.get("location", ""))
-            auto_note = _norm(payload.get("note", "")) or "Auto-zaduženje pri kreiranju sredstva"
-            if new_uid and auto_holder:
-                _try_create_assignment_after_create(new_uid, auto_holder, auto_loc, auto_note)
+            fn = globals().get("_try_create_assignment_after_create")
+            if callable(fn):
+                assignee = _norm(payload.get("assignee", "") or payload.get("auto_assign_to", "") or payload.get("current_holder", ""))
+                location = _norm(payload.get("location", "") or payload.get("auto_location", ""))
+                note_extra = _norm(payload.get("assign_note", "") or payload.get("note", ""))
+                if uid and assignee:
+                    note = "Auto-zaduženje pri kreiranju sredstva"
+                    if note_extra:
+                        note = f"{note} — {note_extra}"
+                    fn(asset_uid=uid, to_holder=assignee, to_location=location, note=note)
         except Exception:
             pass
 
-        self.reload()
-        if new_uid:
-            self._select_uid(new_uid)
+        QMessageBox.information(self, "OK", f"Kreirano sredstvo:\n{uid or '(UID nije vraćen)'}")
+        self._state_dirty()
+        self.request_reload()
 
-# (FILENAME: ui/assets_page.py - END PART 2)
-# FILENAME: ui/assets_page.py
+        if uid:
+            def _sel() -> None:
+                try:
+                    for r in range(self.table.rowCount()):
+                        it = self.table.item(r, self.COL_IDX_UID)
+                        if it and it.text().strip() == uid:
+                            self.table.setCurrentCell(r, self.COL_IDX_UID)
+                            try:
+                                self.table.scrollToItem(it, QAbstractItemView.PositionAtCenter)
+                            except Exception:
+                                pass
+                            return
+                except Exception:
+                    return
+            QTimer.singleShot(260, _sel)
 
-# -*- coding: utf-8 -*-
-# FILENAME: ui/assets_page.py
-# (FILENAME: ui/assets_page.py - START PART 3)
-
-# -------------------- AssetsPage: post-init wiring (non-invasive) --------------------
-def _assets_try_wire_columns(page: "AssetsPage") -> None:
-    """
-    Best-effort integracija 'wire_columns' ako postoji u projektu.
-    Ne ruši aplikaciju ako funkcija/modul ne postoje.
-    """
-    # 1) global function by convention
-    for fn_name in ("wire_assets_columns", "wire_columns", "wire_assets_table_columns"):
-        fn = globals().get(fn_name, None)
-        if callable(fn):
-            try:
-                fn(page.table)
-                return
-            except Exception:
-                pass
-
-    # 2) module-based (optional)
-    try:
-        # primer: ui/columns.py može imati wire_assets_columns(table)
-        from ui.columns import wire_assets_columns  # type: ignore
-        try:
-            wire_assets_columns(page.table)
+    def open_selected_detail(self) -> None:
+        if not self._has_any_view:
+            QMessageBox.warning(self, "Zabranjeno", "Nemaš pravo da vidiš detalje sredstva.")
             return
-        except Exception:
-            pass
-    except Exception:
-        pass
+        row = self._current_row_any()
+        if row < 0:
+            QMessageBox.information(self, "Info", "Prvo izaberi red/ćeliju u tabeli.")
+            return
+        self.open_detail(row, 0)
 
-    # 3) nothing found → ok
-    return
+    def open_detail(self, row: int, col: int) -> None:
+        _ = col
+        if not self._has_any_view:
+            return
+        if AssetDetailDialog is None:
+            QMessageBox.critical(self, "Greška", "AssetDetailDialog nije dostupan.")
+            return
 
+        uid_item = self.table.item(int(row), self.COL_IDX_UID)
+        asset_uid = uid_item.text().strip() if uid_item else ""
+        if not asset_uid:
+            return
 
-def _assets_post_wire_once(page: "AssetsPage") -> None:
-    """
-    Hook koji se poziva jednom kad je widget realno prikazan.
-    Ovde kačimo signale i event filtere bez menjanja ranijih delova.
-    """
-    if getattr(page, "_post_wired", False):
-        return
-    page._post_wired = True  # type: ignore
-
-    # wire_columns (ako postoji)
-    _assets_try_wire_columns(page)
-
-    # Double-click otvara detalje
-    try:
-        page.table.itemDoubleClicked.connect(lambda _it: page.open_selected_asset())
-    except Exception:
-        pass
-
-    # Sort change → reselect po UID (da ne “pobegne” selekcija)
-    try:
-        hdr = page.table.horizontalHeader()
-
-        def _on_sort_changed(_col: int, _order) -> None:
+        try:
             try:
-                uid = getattr(page, "_selected_uid", "") or page._selected_uid_from_table()
-                if uid:
-                    # mali defer da Qt završi re-order
-                    from PySide6.QtCore import QTimer  # type: ignore
-                    QTimer.singleShot(0, lambda: page._select_uid(uid))
-            except Exception:
-                pass
-            try:
-                page._persist_state()
-            except Exception:
-                pass
+                dlg = AssetDetailDialog(asset_uid=asset_uid, parent=self)  # newer signature
+            except TypeError:
+                dlg = AssetDetailDialog(asset_uid, self)  # legacy signature
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Greška", f"Ne mogu da otvorim detalje.\n\n{e}")
+            return
 
-        hdr.sortIndicatorChanged.connect(_on_sort_changed)  # type: ignore
-    except Exception:
-        pass
+        self.request_reload()
 
-    # Keyboard shortcuts / UX: eventFilter na table viewport
-    try:
-        vp = page.table.viewport()
-        vp.installEventFilter(page)
-    except Exception:
-        pass
-
-    # (bonus) Enter/Return otvara detalje i iz preview dugmeta logike i iz table
-    try:
-        page.table.installEventFilter(page)
-    except Exception:
-        pass
-
-
-def _assets_show_event(self: "AssetsPage", event) -> None:
-    # pozovi originalni showEvent (ako postoji)
-    try:
-        super(AssetsPage, self).showEvent(event)  # type: ignore
-    except Exception:
-        pass
-
-    # post-wire (once)
-    try:
-        _assets_post_wire_once(self)
-    except Exception:
-        pass
-
-
-def _assets_event_filter(self: "AssetsPage", obj, ev) -> bool:
-    """
-    Prečice:
-    - Ctrl+F: fokus na pretragu
-    - Enter: otvori detalje selektovanog sredstva
-    - Esc: očisti pretragu (ako je fokus u search)
-    """
-    try:
-        from PySide6.QtCore import QEvent, Qt  # type: ignore
-    except Exception:
-        return False
-
-    try:
-        if ev.type() == QEvent.KeyPress:
-            key = ev.key()
-            mods = ev.modifiers()
-
-            # Ctrl+F → fokus na search
-            if (mods & Qt.ControlModifier) and key in (Qt.Key_F,):
-                try:
-                    self.ed_search.setFocus()
-                    self.ed_search.selectAll()
-                    return True
-                except Exception:
-                    return False
-
-            # Enter/Return → open detail (kad fokus na tabeli/viewportu)
-            if key in (Qt.Key_Return, Qt.Key_Enter):
-                try:
-                    # ako je fokus u search, ne otvaraj odmah (ne prekidaj kucanje)
-                    if self.ed_search.hasFocus():
-                        return False
-                except Exception:
-                    pass
-                try:
-                    self.open_selected_asset()
-                    return True
-                except Exception:
-                    return False
-
-            # Esc → clear search (ako je fokus na search)
-            if key == Qt.Key_Escape:
-                try:
-                    if self.ed_search.hasFocus() and self.ed_search.text().strip():
-                        self.ed_search.setText("")
-                        return True
-                except Exception:
-                    return False
-
-        return False
-    except Exception:
-        return False
-
-
-# Monkey-patch: dodaj showEvent + eventFilter bez regeneracije ranijih delova
-try:
-    AssetsPage.showEvent = _assets_show_event  # type: ignore
-except Exception:
-    pass
-
-try:
-    AssetsPage.eventFilter = _assets_event_filter  # type: ignore
-except Exception:
-    pass
-
-# (FILENAME: ui/assets_page.py - END PART 3)
+# (FILENAME: ui/assets_page.py - END PART 3/3)
 # FILENAME: ui/assets_page.py
-
-

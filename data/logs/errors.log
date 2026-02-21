@@ -948,3 +948,185 @@ AttributeError: 'AssetsPage' object has no attribute 'open_selected_detail'
                                   ^^^^^^^^^^^^^^^^^^^^^^^^^
 AttributeError: 'AssetsPage' object has no attribute 'open_selected_detail'
 
+2026-02-20 11:17:03 | ERROR | BazaS2 | run=b40cee42d7 | user=- | role=- | FATAL ERROR: unexpected indent (assets_page.py, line 5)
+2026-02-20 11:17:03 | ERROR | BazaS2 | run=b40cee42d7 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 5
+    def _qss_btn_soft(dark: bool) -> str:
+IndentationError: unexpected indent
+
+2026-02-20 12:13:18 | ERROR | BazaS2 | run=22c34cd511 | user=- | role=- | FATAL ERROR: 'PySide6.QtWidgets.QWidget.__init__' called with wrong argument types:
+  PySide6.QtWidgets.QWidget.__init__(Logger)
+Supported signatures:
+  PySide6.QtWidgets.QWidget.__init__(parent: PySide6.QtWidgets.QWidget | None = None, f: PySide6.QtCore.Qt.WindowType = Default(Qt.WindowFlags), *, modal: bool | None = None, windowModality: PySide6.QtCore.Qt.WindowModality | None = None, enabled: bool | None = None, geometry: PySide6.QtCore.QRect | None = None, frameGeometry: PySide6.QtCore.QRect | None = None, normalGeometry: PySide6.QtCore.QRect | None = None, x: int | None = None, y: int | None = None, pos: PySide6.QtCore.QPoint | None = None, frameSize: PySide6.QtCore.QSize | None = None, size: PySide6.QtCore.QSize | None = None, width: int | None = None, height: int | None = None, rect: PySide6.QtCore.QRect | None = None, childrenRect: PySide6.QtCore.QRect | None = None, childrenRegion: PySide6.QtGui.QRegion | None = None, sizePolicy: PySide6.QtWidgets.QSizePolicy | None = None, minimumSize: PySide6.QtCore.QSize | None = None, maximumSize: PySide6.QtCore.QSize | None = None, minimumWidth: int | None = None, minimumHeight: int | None = None, maximumWidth: int | None = None, maximumHeight: int | None = None, sizeIncrement: PySide6.QtCore.QSize | None = None, baseSize: PySide6.QtCore.QSize | None = None, palette: PySide6.QtGui.QPalette | None = None, font: PySide6.QtGui.QFont | None = None, cursor: PySide6.QtGui.QCursor | None = None, mouseTracking: bool | None = None, tabletTracking: bool | None = None, isActiveWindow: bool | None = None, focusPolicy: PySide6.QtCore.Qt.FocusPolicy | None = None, focus: bool | None = None, contextMenuPolicy: PySide6.QtCore.Qt.ContextMenuPolicy | None = None, updatesEnabled: bool | None = None, visible: bool | None = None, minimized: bool | None = None, maximized: bool | None = None, fullScreen: bool | None = None, sizeHint: PySide6.QtCore.QSize | None = None, minimumSizeHint: PySide6.QtCore.QSize | None = None, acceptDrops: bool | None = None, windowTitle: str | None = None, windowIcon: PySide6.QtGui.QIcon | None = None, windowIconText: str | None = None, windowOpacity: float | None = None, windowModified: bool | None = None, toolTip: str | None = None, toolTipDuration: int | None = None, statusTip: str | None = None, whatsThis: str | None = None, accessibleName: str | None = None, accessibleDescription: str | None = None, accessibleIdentifier: str | None = None, layoutDirection: PySide6.QtCore.Qt.LayoutDirection | None = None, autoFillBackground: bool | None = None, styleSheet: str | None = None, locale: PySide6.QtCore.QLocale | None = None, windowFilePath: str | None = None, inputMethodHints: PySide6.QtCore.Qt.InputMethodHint | None = None)
+2026-02-20 12:13:18 | ERROR | BazaS2 | run=22c34cd511 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1320, in start_ui
+    win = MainWindow(logger)
+  File "D:\DEV\AppToc\V1Baza\app.py", line 959, in __init__
+    self._rebuild_ui_by_profile()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1161, in _rebuild_ui_by_profile
+    page_assets = AssetsPage(self.logger)
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 790, in __init__
+    super().__init__(parent)
+    ~~~~~~~~~~~~~~~~^^^^^^^^
+TypeError: 'PySide6.QtWidgets.QWidget.__init__' called with wrong argument types:
+  PySide6.QtWidgets.QWidget.__init__(Logger)
+Supported signatures:
+  PySide6.QtWidgets.QWidget.__init__(parent: PySide6.QtWidgets.QWidget | None = None, f: PySide6.QtCore.Qt.WindowType = Default(Qt.WindowFlags), *, modal: bool | None = None, windowModality: PySide6.QtCore.Qt.WindowModality | None = None, enabled: bool | None = None, geometry: PySide6.QtCore.QRect | None = None, frameGeometry: PySide6.QtCore.QRect | None = None, normalGeometry: PySide6.QtCore.QRect | None = None, x: int | None = None, y: int | None = None, pos: PySide6.QtCore.QPoint | None = None, frameSize: PySide6.QtCore.QSize | None = None, size: PySide6.QtCore.QSize | None = None, width: int | None = None, height: int | None = None, rect: PySide6.QtCore.QRect | None = None, childrenRect: PySide6.QtCore.QRect | None = None, childrenRegion: PySide6.QtGui.QRegion | None = None, sizePolicy: PySide6.QtWidgets.QSizePolicy | None = None, minimumSize: PySide6.QtCore.QSize | None = None, maximumSize: PySide6.QtCore.QSize | None = None, minimumWidth: int | None = None, minimumHeight: int | None = None, maximumWidth: int | None = None, maximumHeight: int | None = None, sizeIncrement: PySide6.QtCore.QSize | None = None, baseSize: PySide6.QtCore.QSize | None = None, palette: PySide6.QtGui.QPalette | None = None, font: PySide6.QtGui.QFont | None = None, cursor: PySide6.QtGui.QCursor | None = None, mouseTracking: bool | None = None, tabletTracking: bool | None = None, isActiveWindow: bool | None = None, focusPolicy: PySide6.QtCore.Qt.FocusPolicy | None = None, focus: bool | None = None, contextMenuPolicy: PySide6.QtCore.Qt.ContextMenuPolicy | None = None, updatesEnabled: bool | None = None, visible: bool | None = None, minimized: bool | None = None, maximized: bool | None = None, fullScreen: bool | None = None, sizeHint: PySide6.QtCore.QSize | None = None, minimumSizeHint: PySide6.QtCore.QSize | None = None, acceptDrops: bool | None = None, windowTitle: str | None = None, windowIcon: PySide6.QtGui.QIcon | None = None, windowIconText: str | None = None, windowOpacity: float | None = None, windowModified: bool | None = None, toolTip: str | None = None, toolTipDuration: int | None = None, statusTip: str | None = None, whatsThis: str | None = None, accessibleName: str | None = None, accessibleDescription: str | None = None, accessibleIdentifier: str | None = None, layoutDirection: PySide6.QtCore.Qt.LayoutDirection | None = None, autoFillBackground: bool | None = None, styleSheet: str | None = None, locale: PySide6.QtCore.QLocale | None = None, windowFilePath: str | None = None, inputMethodHints: PySide6.QtCore.Qt.InputMethodHint | None = None)
+
+2026-02-20 12:33:00 | ERROR | BazaS2 | run=0b4ed39b94 | user=- | role=- | FATAL ERROR: cannot import name 'AssetsPage' from 'ui.assets_page' (D:\DEV\AppToc\V1Baza\ui\assets_page.py)
+2026-02-20 12:33:00 | ERROR | BazaS2 | run=0b4ed39b94 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ImportError: cannot import name 'AssetsPage' from 'ui.assets_page' (D:\DEV\AppToc\V1Baza\ui\assets_page.py). Did you mean: 'assets_page'?
+
+2026-02-20 12:45:28 | ERROR | BazaS2 | run=75b4508997 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 12:47:09 | ERROR | BazaS2 | run=834ad77829 | user=- | role=- | FATAL ERROR: 'AssetsPage' object has no attribute 'open_selected_detail'
+2026-02-20 12:47:09 | ERROR | BazaS2 | run=834ad77829 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1320, in start_ui
+    win = MainWindow(logger)
+  File "D:\DEV\AppToc\V1Baza\app.py", line 959, in __init__
+    self._rebuild_ui_by_profile()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1161, in _rebuild_ui_by_profile
+    page_assets = AssetsPage(self.logger)
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 1190, in __init__
+    self.preview.set_open_handler(self.open_selected_detail)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'AssetsPage' object has no attribute 'open_selected_detail'
+
+2026-02-20 12:47:31 | ERROR | BazaS2 | run=64265c4d9d | user=- | role=- | FATAL ERROR: 'AssetsPage' object has no attribute 'open_selected_detail'
+2026-02-20 12:47:31 | ERROR | BazaS2 | run=64265c4d9d | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1320, in start_ui
+    win = MainWindow(logger)
+  File "D:\DEV\AppToc\V1Baza\app.py", line 959, in __init__
+    self._rebuild_ui_by_profile()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1161, in _rebuild_ui_by_profile
+    page_assets = AssetsPage(self.logger)
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 1190, in __init__
+    self.preview.set_open_handler(self.open_selected_detail)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'AssetsPage' object has no attribute 'open_selected_detail'
+
+2026-02-20 12:48:22 | ERROR | BazaS2 | run=231b8029c4 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 12:48:49 | ERROR | BazaS2 | run=dc9474cf44 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 14:44:44 | ERROR | BazaS2 | run=71cb9e3062 | user=- | role=- | FATAL ERROR: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+2026-02-20 14:44:44 | ERROR | BazaS2 | run=71cb9e3062 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 39, in <module>
+    from PySide6.QtWidgets import (  # type: ignore
+    ...<23 lines>...
+    )
+ImportError: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+
+2026-02-20 20:45:25 | ERROR | BazaS2 | run=60445f528b | user=- | role=- | FATAL ERROR: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+2026-02-20 20:45:25 | ERROR | BazaS2 | run=60445f528b | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 39, in <module>
+    from PySide6.QtWidgets import (  # type: ignore
+    ...<23 lines>...
+    )
+ImportError: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+
+2026-02-20 21:04:58 | ERROR | BazaS2 | run=57c7b76029 | user=- | role=- | FATAL ERROR: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+2026-02-20 21:04:58 | ERROR | BazaS2 | run=57c7b76029 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 39, in <module>
+    from PySide6.QtWidgets import (  # type: ignore
+    ...<23 lines>...
+    )
+ImportError: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+
+2026-02-20 21:18:32 | ERROR | BazaS2 | run=4f8774af21 | user=- | role=- | FATAL ERROR: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+2026-02-20 21:18:32 | ERROR | BazaS2 | run=4f8774af21 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 41, in <module>
+    from PySide6.QtWidgets import (  # type: ignore
+    ...<26 lines>...
+    )
+ImportError: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+
+2026-02-20 21:26:11 | ERROR | BazaS2 | run=53b9425b0d | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 21:27:10 | ERROR | BazaS2 | run=2d9d285a6c | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 21:36:08 | ERROR | BazaS2 | run=f02808972b | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 21:48:49 | CRITICAL | BazaS2 | run=f02808972b | user=- | role=- | UNHANDLED EXCEPTION (sys.excepthook)
+Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 780, in eventFilter
+    def eventFilter(self, obj, ev):  # type: ignore[override]
+    
+KeyboardInterrupt
+2026-02-20 21:49:52 | ERROR | BazaS2 | run=47e0f53765 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 22:05:25 | ERROR | BazaS2 | run=72332819f3 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 22:18:04 | ERROR | BazaS2 | run=be072d49df | user=- | role=- | FATAL ERROR: f-string: single '}' is not allowed (assets_page.py, line 475)
+2026-02-20 22:18:04 | ERROR | BazaS2 | run=be072d49df | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 475
+    f"color: {'rgba(255,255,255,0.86)' if dark else 'rgba(0,0,0,0.82)'}; }"
+                                                                         ^
+SyntaxError: f-string: single '}' is not allowed
+
+2026-02-20 22:49:25 | ERROR | BazaS2 | run=d949746f85 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 23:38:34 | ERROR | BazaS2 | run=7ac8076ec6 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 23:53:04 | ERROR | BazaS2 | run=96ce00e43c | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-21 00:24:38 | ERROR | BazaS2 | run=2d72e19305 | user=- | role=- | FATAL ERROR: cannot import name 'AssetsPage' from 'ui.assets_page' (D:\DEV\AppToc\V1Baza\ui\assets_page.py)
+2026-02-21 00:24:38 | ERROR | BazaS2 | run=2d72e19305 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ImportError: cannot import name 'AssetsPage' from 'ui.assets_page' (D:\DEV\AppToc\V1Baza\ui\assets_page.py). Did you mean: 'assets_page'?
+
+2026-02-21 13:39:26 | ERROR | BazaS2 | run=0ff97ec379 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-21 13:40:51 | CRITICAL | BazaS2 | run=0ff97ec379 | user=- | role=- | UNHANDLED EXCEPTION (sys.excepthook)
+Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 780, in eventFilter
+    def eventFilter(self, obj, ev):  # type: ignore[override]
+    
+KeyboardInterrupt

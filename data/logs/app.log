@@ -9534,3 +9534,545 @@ AttributeError: 'AssetsPage' object has no attribute 'open_selected_detail'
 2026-02-19 09:00:14 | INFO | BazaS2 | run=f1fdbb135d | user=- | role=- | DB init OK. schema_version: 7 -> 7
 2026-02-19 09:00:14 | INFO | BazaS2 | run=f1fdbb135d | user=- | role=- | Theme applied (saved theme).
 2026-02-19 09:00:14 | INFO | BazaS2 | run=f1fdbb135d | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 11:16:59 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 11:16:59 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | RUN_ID=b40cee42d7
+2026-02-20 11:16:59 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 11:16:59 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 11:16:59 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 11:16:59 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 11:16:59 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 11:16:59 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 11:16:59 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | Pokrećem self-check...
+2026-02-20 11:17:01 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 11:17:01 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 11:17:01 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 11:17:01 | INFO | BazaS2 | run=b40cee42d7 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 11:17:03 | ERROR | BazaS2 | run=b40cee42d7 | user=- | role=- | FATAL ERROR: unexpected indent (assets_page.py, line 5)
+2026-02-20 11:17:03 | ERROR | BazaS2 | run=b40cee42d7 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 5
+    def _qss_btn_soft(dark: bool) -> str:
+IndentationError: unexpected indent
+
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | RUN_ID=22c34cd511
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | Pokrećem self-check...
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 12:13:06 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 12:13:07 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | Theme applied (saved theme).
+2026-02-20 12:13:07 | INFO | BazaS2 | run=22c34cd511 | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 12:13:18 | ERROR | BazaS2 | run=22c34cd511 | user=- | role=- | FATAL ERROR: 'PySide6.QtWidgets.QWidget.__init__' called with wrong argument types:
+  PySide6.QtWidgets.QWidget.__init__(Logger)
+Supported signatures:
+  PySide6.QtWidgets.QWidget.__init__(parent: PySide6.QtWidgets.QWidget | None = None, f: PySide6.QtCore.Qt.WindowType = Default(Qt.WindowFlags), *, modal: bool | None = None, windowModality: PySide6.QtCore.Qt.WindowModality | None = None, enabled: bool | None = None, geometry: PySide6.QtCore.QRect | None = None, frameGeometry: PySide6.QtCore.QRect | None = None, normalGeometry: PySide6.QtCore.QRect | None = None, x: int | None = None, y: int | None = None, pos: PySide6.QtCore.QPoint | None = None, frameSize: PySide6.QtCore.QSize | None = None, size: PySide6.QtCore.QSize | None = None, width: int | None = None, height: int | None = None, rect: PySide6.QtCore.QRect | None = None, childrenRect: PySide6.QtCore.QRect | None = None, childrenRegion: PySide6.QtGui.QRegion | None = None, sizePolicy: PySide6.QtWidgets.QSizePolicy | None = None, minimumSize: PySide6.QtCore.QSize | None = None, maximumSize: PySide6.QtCore.QSize | None = None, minimumWidth: int | None = None, minimumHeight: int | None = None, maximumWidth: int | None = None, maximumHeight: int | None = None, sizeIncrement: PySide6.QtCore.QSize | None = None, baseSize: PySide6.QtCore.QSize | None = None, palette: PySide6.QtGui.QPalette | None = None, font: PySide6.QtGui.QFont | None = None, cursor: PySide6.QtGui.QCursor | None = None, mouseTracking: bool | None = None, tabletTracking: bool | None = None, isActiveWindow: bool | None = None, focusPolicy: PySide6.QtCore.Qt.FocusPolicy | None = None, focus: bool | None = None, contextMenuPolicy: PySide6.QtCore.Qt.ContextMenuPolicy | None = None, updatesEnabled: bool | None = None, visible: bool | None = None, minimized: bool | None = None, maximized: bool | None = None, fullScreen: bool | None = None, sizeHint: PySide6.QtCore.QSize | None = None, minimumSizeHint: PySide6.QtCore.QSize | None = None, acceptDrops: bool | None = None, windowTitle: str | None = None, windowIcon: PySide6.QtGui.QIcon | None = None, windowIconText: str | None = None, windowOpacity: float | None = None, windowModified: bool | None = None, toolTip: str | None = None, toolTipDuration: int | None = None, statusTip: str | None = None, whatsThis: str | None = None, accessibleName: str | None = None, accessibleDescription: str | None = None, accessibleIdentifier: str | None = None, layoutDirection: PySide6.QtCore.Qt.LayoutDirection | None = None, autoFillBackground: bool | None = None, styleSheet: str | None = None, locale: PySide6.QtCore.QLocale | None = None, windowFilePath: str | None = None, inputMethodHints: PySide6.QtCore.Qt.InputMethodHint | None = None)
+2026-02-20 12:13:18 | ERROR | BazaS2 | run=22c34cd511 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1320, in start_ui
+    win = MainWindow(logger)
+  File "D:\DEV\AppToc\V1Baza\app.py", line 959, in __init__
+    self._rebuild_ui_by_profile()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1161, in _rebuild_ui_by_profile
+    page_assets = AssetsPage(self.logger)
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 790, in __init__
+    super().__init__(parent)
+    ~~~~~~~~~~~~~~~~^^^^^^^^
+TypeError: 'PySide6.QtWidgets.QWidget.__init__' called with wrong argument types:
+  PySide6.QtWidgets.QWidget.__init__(Logger)
+Supported signatures:
+  PySide6.QtWidgets.QWidget.__init__(parent: PySide6.QtWidgets.QWidget | None = None, f: PySide6.QtCore.Qt.WindowType = Default(Qt.WindowFlags), *, modal: bool | None = None, windowModality: PySide6.QtCore.Qt.WindowModality | None = None, enabled: bool | None = None, geometry: PySide6.QtCore.QRect | None = None, frameGeometry: PySide6.QtCore.QRect | None = None, normalGeometry: PySide6.QtCore.QRect | None = None, x: int | None = None, y: int | None = None, pos: PySide6.QtCore.QPoint | None = None, frameSize: PySide6.QtCore.QSize | None = None, size: PySide6.QtCore.QSize | None = None, width: int | None = None, height: int | None = None, rect: PySide6.QtCore.QRect | None = None, childrenRect: PySide6.QtCore.QRect | None = None, childrenRegion: PySide6.QtGui.QRegion | None = None, sizePolicy: PySide6.QtWidgets.QSizePolicy | None = None, minimumSize: PySide6.QtCore.QSize | None = None, maximumSize: PySide6.QtCore.QSize | None = None, minimumWidth: int | None = None, minimumHeight: int | None = None, maximumWidth: int | None = None, maximumHeight: int | None = None, sizeIncrement: PySide6.QtCore.QSize | None = None, baseSize: PySide6.QtCore.QSize | None = None, palette: PySide6.QtGui.QPalette | None = None, font: PySide6.QtGui.QFont | None = None, cursor: PySide6.QtGui.QCursor | None = None, mouseTracking: bool | None = None, tabletTracking: bool | None = None, isActiveWindow: bool | None = None, focusPolicy: PySide6.QtCore.Qt.FocusPolicy | None = None, focus: bool | None = None, contextMenuPolicy: PySide6.QtCore.Qt.ContextMenuPolicy | None = None, updatesEnabled: bool | None = None, visible: bool | None = None, minimized: bool | None = None, maximized: bool | None = None, fullScreen: bool | None = None, sizeHint: PySide6.QtCore.QSize | None = None, minimumSizeHint: PySide6.QtCore.QSize | None = None, acceptDrops: bool | None = None, windowTitle: str | None = None, windowIcon: PySide6.QtGui.QIcon | None = None, windowIconText: str | None = None, windowOpacity: float | None = None, windowModified: bool | None = None, toolTip: str | None = None, toolTipDuration: int | None = None, statusTip: str | None = None, whatsThis: str | None = None, accessibleName: str | None = None, accessibleDescription: str | None = None, accessibleIdentifier: str | None = None, layoutDirection: PySide6.QtCore.Qt.LayoutDirection | None = None, autoFillBackground: bool | None = None, styleSheet: str | None = None, locale: PySide6.QtCore.QLocale | None = None, windowFilePath: str | None = None, inputMethodHints: PySide6.QtCore.Qt.InputMethodHint | None = None)
+
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | RUN_ID=0b4ed39b94
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | Pokrećem self-check...
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 12:32:57 | INFO | BazaS2 | run=0b4ed39b94 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 12:33:00 | ERROR | BazaS2 | run=0b4ed39b94 | user=- | role=- | FATAL ERROR: cannot import name 'AssetsPage' from 'ui.assets_page' (D:\DEV\AppToc\V1Baza\ui\assets_page.py)
+2026-02-20 12:33:00 | ERROR | BazaS2 | run=0b4ed39b94 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ImportError: cannot import name 'AssetsPage' from 'ui.assets_page' (D:\DEV\AppToc\V1Baza\ui\assets_page.py). Did you mean: 'assets_page'?
+
+2026-02-20 12:45:18 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 12:45:18 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | RUN_ID=75b4508997
+2026-02-20 12:45:18 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 12:45:18 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 12:45:18 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 12:45:18 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 12:45:18 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 12:45:18 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 12:45:18 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | Pokrećem self-check...
+2026-02-20 12:45:19 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 12:45:19 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 12:45:19 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 12:45:19 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 12:45:19 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | Theme applied (saved theme).
+2026-02-20 12:45:19 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 12:45:28 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | AssignmentsPage: učitano 10 zapisa.
+2026-02-20 12:45:28 | INFO | BazaS2 | run=75b4508997 | user=- | role=- | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-20 12:45:28 | ERROR | BazaS2 | run=75b4508997 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 12:45:31 | WARNING | BazaS2 | run=75b4508997 | user=- | role=- | QT_WARN: QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+2026-02-20 12:45:45 | WARNING | BazaS2 | run=75b4508997 | user=- | role=- | QT_WARN: QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+2026-02-20 12:46:59 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 12:46:59 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | RUN_ID=834ad77829
+2026-02-20 12:46:59 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 12:46:59 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 12:46:59 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 12:46:59 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 12:46:59 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 12:46:59 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 12:46:59 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | Pokrećem self-check...
+2026-02-20 12:47:01 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 12:47:01 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 12:47:01 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 12:47:01 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 12:47:01 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | Theme applied (saved theme).
+2026-02-20 12:47:01 | INFO | BazaS2 | run=834ad77829 | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 12:47:09 | ERROR | BazaS2 | run=834ad77829 | user=- | role=- | FATAL ERROR: 'AssetsPage' object has no attribute 'open_selected_detail'
+2026-02-20 12:47:09 | ERROR | BazaS2 | run=834ad77829 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1320, in start_ui
+    win = MainWindow(logger)
+  File "D:\DEV\AppToc\V1Baza\app.py", line 959, in __init__
+    self._rebuild_ui_by_profile()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1161, in _rebuild_ui_by_profile
+    page_assets = AssetsPage(self.logger)
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 1190, in __init__
+    self.preview.set_open_handler(self.open_selected_detail)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'AssetsPage' object has no attribute 'open_selected_detail'
+
+2026-02-20 12:47:19 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 12:47:19 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | RUN_ID=64265c4d9d
+2026-02-20 12:47:19 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 12:47:19 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 12:47:19 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 12:47:19 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 12:47:19 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 12:47:19 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 12:47:19 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | Pokrećem self-check...
+2026-02-20 12:47:23 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 12:47:23 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 12:47:23 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 12:47:23 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 12:47:23 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | Theme applied (saved theme).
+2026-02-20 12:47:23 | INFO | BazaS2 | run=64265c4d9d | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 12:47:31 | ERROR | BazaS2 | run=64265c4d9d | user=- | role=- | FATAL ERROR: 'AssetsPage' object has no attribute 'open_selected_detail'
+2026-02-20 12:47:31 | ERROR | BazaS2 | run=64265c4d9d | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1320, in start_ui
+    win = MainWindow(logger)
+  File "D:\DEV\AppToc\V1Baza\app.py", line 959, in __init__
+    self._rebuild_ui_by_profile()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1161, in _rebuild_ui_by_profile
+    page_assets = AssetsPage(self.logger)
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 1190, in __init__
+    self.preview.set_open_handler(self.open_selected_detail)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'AssetsPage' object has no attribute 'open_selected_detail'
+
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | RUN_ID=231b8029c4
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | Pokrećem self-check...
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 12:48:04 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 12:48:05 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | Theme applied (saved theme).
+2026-02-20 12:48:05 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 12:48:20 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | AssignmentsPage: učitano 10 zapisa.
+2026-02-20 12:48:20 | INFO | BazaS2 | run=231b8029c4 | user=- | role=- | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-20 12:48:22 | ERROR | BazaS2 | run=231b8029c4 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | RUN_ID=dc9474cf44
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | Pokrećem self-check...
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 12:48:41 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 12:48:42 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | Theme applied (saved theme).
+2026-02-20 12:48:42 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 12:48:49 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | AssignmentsPage: učitano 10 zapisa.
+2026-02-20 12:48:49 | INFO | BazaS2 | run=dc9474cf44 | user=- | role=- | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-20 12:48:49 | ERROR | BazaS2 | run=dc9474cf44 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | RUN_ID=71cb9e3062
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | Pokrećem self-check...
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 14:44:42 | INFO | BazaS2 | run=71cb9e3062 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 14:44:44 | ERROR | BazaS2 | run=71cb9e3062 | user=- | role=- | FATAL ERROR: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+2026-02-20 14:44:44 | ERROR | BazaS2 | run=71cb9e3062 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 39, in <module>
+    from PySide6.QtWidgets import (  # type: ignore
+    ...<23 lines>...
+    )
+ImportError: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | RUN_ID=60445f528b
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | Pokrećem self-check...
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 14:50:11 | INFO | BazaS2 | run=60445f528b | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 20:45:25 | ERROR | BazaS2 | run=60445f528b | user=- | role=- | FATAL ERROR: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+2026-02-20 20:45:25 | ERROR | BazaS2 | run=60445f528b | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 39, in <module>
+    from PySide6.QtWidgets import (  # type: ignore
+    ...<23 lines>...
+    )
+ImportError: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+
+2026-02-20 21:04:28 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 21:04:28 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | RUN_ID=57c7b76029
+2026-02-20 21:04:28 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 21:04:28 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 21:04:28 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 21:04:28 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 21:04:28 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 21:04:28 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 21:04:28 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | Pokrećem self-check...
+2026-02-20 21:04:29 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 21:04:29 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 21:04:29 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 21:04:29 | INFO | BazaS2 | run=57c7b76029 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 21:04:58 | ERROR | BazaS2 | run=57c7b76029 | user=- | role=- | FATAL ERROR: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+2026-02-20 21:04:58 | ERROR | BazaS2 | run=57c7b76029 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 39, in <module>
+    from PySide6.QtWidgets import (  # type: ignore
+    ...<23 lines>...
+    )
+ImportError: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+
+2026-02-20 21:17:38 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 21:17:38 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | RUN_ID=4f8774af21
+2026-02-20 21:17:38 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 21:17:38 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 21:17:38 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 21:17:38 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 21:17:38 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 21:17:38 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 21:17:38 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | Pokrećem self-check...
+2026-02-20 21:17:39 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 21:17:39 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 21:17:39 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 21:17:39 | INFO | BazaS2 | run=4f8774af21 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 21:18:32 | ERROR | BazaS2 | run=4f8774af21 | user=- | role=- | FATAL ERROR: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+2026-02-20 21:18:32 | ERROR | BazaS2 | run=4f8774af21 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 41, in <module>
+    from PySide6.QtWidgets import (  # type: ignore
+    ...<26 lines>...
+    )
+ImportError: cannot import name 'QShortcut' from 'PySide6.QtWidgets' (C:\Users\marko\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PySide6\QtWidgets.pyd)
+
+2026-02-20 21:25:59 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 21:25:59 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | RUN_ID=53b9425b0d
+2026-02-20 21:25:59 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 21:25:59 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 21:25:59 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 21:25:59 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 21:25:59 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 21:25:59 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 21:25:59 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | Pokrećem self-check...
+2026-02-20 21:26:00 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 21:26:00 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 21:26:00 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 21:26:00 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 21:26:00 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | Theme applied (saved theme).
+2026-02-20 21:26:00 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 21:26:11 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | AssignmentsPage: učitano 10 zapisa.
+2026-02-20 21:26:11 | INFO | BazaS2 | run=53b9425b0d | user=- | role=- | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-20 21:26:11 | ERROR | BazaS2 | run=53b9425b0d | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 21:26:42 | WARNING | BazaS2 | run=53b9425b0d | user=- | role=- | QT_WARN: QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | RUN_ID=2d9d285a6c
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | Pokrećem self-check...
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | Theme applied (saved theme).
+2026-02-20 21:27:00 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 21:27:09 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | AssignmentsPage: učitano 10 zapisa.
+2026-02-20 21:27:09 | INFO | BazaS2 | run=2d9d285a6c | user=- | role=- | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-20 21:27:10 | ERROR | BazaS2 | run=2d9d285a6c | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 21:35:58 | INFO | BazaS2 | run=f02808972b | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 21:35:58 | INFO | BazaS2 | run=f02808972b | user=- | role=- | RUN_ID=f02808972b
+2026-02-20 21:35:58 | INFO | BazaS2 | run=f02808972b | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 21:35:58 | INFO | BazaS2 | run=f02808972b | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 21:35:58 | INFO | BazaS2 | run=f02808972b | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 21:35:58 | INFO | BazaS2 | run=f02808972b | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 21:35:58 | INFO | BazaS2 | run=f02808972b | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 21:35:58 | INFO | BazaS2 | run=f02808972b | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 21:35:58 | INFO | BazaS2 | run=f02808972b | user=- | role=- | Pokrećem self-check...
+2026-02-20 21:35:59 | INFO | BazaS2 | run=f02808972b | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 21:35:59 | INFO | BazaS2 | run=f02808972b | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 21:35:59 | INFO | BazaS2 | run=f02808972b | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 21:35:59 | INFO | BazaS2 | run=f02808972b | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 21:35:59 | INFO | BazaS2 | run=f02808972b | user=- | role=- | Theme applied (saved theme).
+2026-02-20 21:35:59 | INFO | BazaS2 | run=f02808972b | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 21:36:08 | INFO | BazaS2 | run=f02808972b | user=- | role=- | AssignmentsPage: učitano 10 zapisa.
+2026-02-20 21:36:08 | INFO | BazaS2 | run=f02808972b | user=- | role=- | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-20 21:36:08 | ERROR | BazaS2 | run=f02808972b | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 21:36:21 | WARNING | BazaS2 | run=f02808972b | user=- | role=- | QT_WARN: QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+2026-02-20 21:48:49 | CRITICAL | BazaS2 | run=f02808972b | user=- | role=- | UNHANDLED EXCEPTION (sys.excepthook)
+Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 780, in eventFilter
+    def eventFilter(self, obj, ev):  # type: ignore[override]
+    
+KeyboardInterrupt
+2026-02-20 21:49:14 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 21:49:14 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | RUN_ID=47e0f53765
+2026-02-20 21:49:14 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 21:49:14 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 21:49:14 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 21:49:14 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 21:49:14 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 21:49:14 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 21:49:14 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | Pokrećem self-check...
+2026-02-20 21:49:17 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 21:49:17 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 21:49:17 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 21:49:17 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 21:49:18 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | Theme applied (saved theme).
+2026-02-20 21:49:18 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 21:49:48 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | AssignmentsPage: učitano 10 zapisa.
+2026-02-20 21:49:48 | INFO | BazaS2 | run=47e0f53765 | user=- | role=- | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-20 21:49:52 | ERROR | BazaS2 | run=47e0f53765 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 22:05:02 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 22:05:02 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | RUN_ID=72332819f3
+2026-02-20 22:05:02 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 22:05:02 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 22:05:02 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 22:05:02 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 22:05:02 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 22:05:02 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 22:05:02 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | Pokrećem self-check...
+2026-02-20 22:05:04 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 22:05:04 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 22:05:04 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 22:05:04 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 22:05:04 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | Theme applied (saved theme).
+2026-02-20 22:05:04 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 22:05:25 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | AssignmentsPage: učitano 10 zapisa.
+2026-02-20 22:05:25 | INFO | BazaS2 | run=72332819f3 | user=- | role=- | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-20 22:05:25 | ERROR | BazaS2 | run=72332819f3 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 22:17:52 | INFO | BazaS2 | run=be072d49df | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 22:17:52 | INFO | BazaS2 | run=be072d49df | user=- | role=- | RUN_ID=be072d49df
+2026-02-20 22:17:52 | INFO | BazaS2 | run=be072d49df | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 22:17:52 | INFO | BazaS2 | run=be072d49df | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 22:17:52 | INFO | BazaS2 | run=be072d49df | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 22:17:52 | INFO | BazaS2 | run=be072d49df | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 22:17:52 | INFO | BazaS2 | run=be072d49df | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 22:17:52 | INFO | BazaS2 | run=be072d49df | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 22:17:52 | INFO | BazaS2 | run=be072d49df | user=- | role=- | Pokrećem self-check...
+2026-02-20 22:17:53 | INFO | BazaS2 | run=be072d49df | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 22:17:53 | INFO | BazaS2 | run=be072d49df | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 22:17:53 | INFO | BazaS2 | run=be072d49df | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 22:17:53 | INFO | BazaS2 | run=be072d49df | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 22:18:04 | ERROR | BazaS2 | run=be072d49df | user=- | role=- | FATAL ERROR: f-string: single '}' is not allowed (assets_page.py, line 475)
+2026-02-20 22:18:04 | ERROR | BazaS2 | run=be072d49df | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 475
+    f"color: {'rgba(255,255,255,0.86)' if dark else 'rgba(0,0,0,0.82)'}; }"
+                                                                         ^
+SyntaxError: f-string: single '}' is not allowed
+
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | RUN_ID=d949746f85
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | Pokrećem self-check...
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 22:49:16 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 22:49:17 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | Theme applied (saved theme).
+2026-02-20 22:49:17 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 22:49:25 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | AssignmentsPage: učitano 10 zapisa.
+2026-02-20 22:49:25 | INFO | BazaS2 | run=d949746f85 | user=- | role=- | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-20 22:49:25 | ERROR | BazaS2 | run=d949746f85 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 23:36:55 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 23:36:55 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | RUN_ID=7ac8076ec6
+2026-02-20 23:36:55 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 23:36:55 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 23:36:55 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 23:36:55 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 23:36:55 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 23:36:55 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 23:36:55 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | Pokrećem self-check...
+2026-02-20 23:36:58 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 23:36:58 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 23:36:58 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 23:36:58 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 23:36:59 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | Theme applied (saved theme).
+2026-02-20 23:36:59 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 23:38:34 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | AssignmentsPage: učitano 10 zapisa.
+2026-02-20 23:38:34 | INFO | BazaS2 | run=7ac8076ec6 | user=- | role=- | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-20 23:38:34 | ERROR | BazaS2 | run=7ac8076ec6 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 23:52:55 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-20 23:52:55 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | RUN_ID=96ce00e43c
+2026-02-20 23:52:55 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-20 23:52:55 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-20 23:52:55 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-20 23:52:55 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-20 23:52:55 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-20 23:52:55 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-20 23:52:55 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | Pokrećem self-check...
+2026-02-20 23:52:55 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-20 23:52:55 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-20 23:52:55 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-20 23:52:56 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-20 23:52:56 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | Theme applied (saved theme).
+2026-02-20 23:52:56 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-20 23:53:04 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | AssignmentsPage: učitano 10 zapisa.
+2026-02-20 23:53:04 | INFO | BazaS2 | run=96ce00e43c | user=- | role=- | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-20 23:53:04 | ERROR | BazaS2 | run=96ce00e43c | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-20 23:53:15 | WARNING | BazaS2 | run=96ce00e43c | user=- | role=- | QT_WARN: QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+2026-02-20 23:53:19 | WARNING | BazaS2 | run=96ce00e43c | user=- | role=- | QT_WARN: QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+2026-02-20 23:53:20 | WARNING | BazaS2 | run=96ce00e43c | user=- | role=- | QT_WARN: QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | RUN_ID=2d72e19305
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | Pokrećem self-check...
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-21 00:24:32 | INFO | BazaS2 | run=2d72e19305 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-21 00:24:38 | ERROR | BazaS2 | run=2d72e19305 | user=- | role=- | FATAL ERROR: cannot import name 'AssetsPage' from 'ui.assets_page' (D:\DEV\AppToc\V1Baza\ui\assets_page.py)
+2026-02-21 00:24:38 | ERROR | BazaS2 | run=2d72e19305 | user=- | role=- | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1409, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 836, in start_ui
+    from ui.assets_page import AssetsPage  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ImportError: cannot import name 'AssetsPage' from 'ui.assets_page' (D:\DEV\AppToc\V1Baza\ui\assets_page.py). Did you mean: 'assets_page'?
+
+2026-02-21 13:39:11 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | === BazaS2 start | version=0.2-v1 ===
+2026-02-21 13:39:11 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | RUN_ID=0ff97ec379
+2026-02-21 13:39:11 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-21 13:39:11 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-21 13:39:11 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-21 13:39:11 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | LOG_ROTATE maxMB=10 backups=10
+2026-02-21 13:39:11 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-21 13:39:11 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-21 13:39:11 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | Pokrećem self-check...
+2026-02-21 13:39:12 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | Deps OK: 4, missing: 0
+2026-02-21 13:39:12 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | Self-check report snimljen: selfcheck_report.json
+2026-02-21 13:39:12 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | Self-check: sve biblioteke prisutne.
+2026-02-21 13:39:12 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | DB init OK. schema_version: 7 -> 7
+2026-02-21 13:39:14 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | Theme applied (saved theme).
+2026-02-21 13:39:14 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-21 13:39:26 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | AssignmentsPage: učitano 10 zapisa.
+2026-02-21 13:39:26 | INFO | BazaS2 | run=0ff97ec379 | user=- | role=- | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-21 13:39:26 | ERROR | BazaS2 | run=0ff97ec379 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-21 13:40:51 | CRITICAL | BazaS2 | run=0ff97ec379 | user=- | role=- | UNHANDLED EXCEPTION (sys.excepthook)
+Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 780, in eventFilter
+    def eventFilter(self, obj, ev):  # type: ignore[override]
+    
+KeyboardInterrupt
