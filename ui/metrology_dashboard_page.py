@@ -1,33 +1,18 @@
 # FILENAME: ui/metrology_dashboard_page.py
-# (FILENAME: ui/metrology_dashboard_page.py - START)  [PART 1/2]
+# (FILENAME: ui/metrology_dashboard_page.py - START PART 1/3)
 # -*- coding: utf-8 -*-
 """
 BazaS2 (offline) — ui/metrology_dashboard_page.py
 
-Metrologija Dashboard (V1) — PRO DARK UI (polish + row status tint):
-- Dark QSS tema (premium)
-- KPI kartice iste dimenzije
-- Status toggle dugmići ispod KPI (checked glow)
-- Chip bar "Aktivni filteri" (sa X)
-- Redovi obojeni po statusu (subtle tint) + leva akcent traka
-- ✅ STATUS kolona sada dobija ISTI tint kao red (badge bez background-a)
-- Sortiranje po kolonama (sort-key, bez prepisivanja prikaza)
-- Context menu + copy
-
-Dodatno (po zahtevu):
-- ✅ Prva kolona: "#" (stabilan broj iz assets.rb)
-- ✅ Drag&drop kolona (samo prikaz): header movable
-- ✅ Dugme: "Kolone: default" (vrati default raspored)
-- ✅ Rashodovana sredstva se NE prikazuju (osim u Rashodu): filtriranje na SQL nivou
-
-Polish (bez gubitka funkcionalnosti):
-- ✅ Srpski prikaz datuma (DD.MM.YYYY) i vremena (DD.MM.YYYY HH:MM, 24h)
-- ✅ Sentinel/prazno (npr. 9999-12-31) se prikazuje kao "—", ali sort radi ispravno
-- ✅ Tooltip prikazuje raw ISO vrednosti
-- ✅ Met UID skraćen u prikazu (tooltip ima pun)
-- ✅ Enter u pretrazi fokusira prvi red
-- ✅ Refresh vraća default sort (kritično gore)
-- ✅ NOVO: "Reset filtera" vraća SVE prikazano (default filteri)
+⚠️ VAŽNO (hardening bez menjanja izgleda):
+- Dashboard je ranije čitao "sve iz baze" i RBAC je bio samo metrology.view -> to je curenje podataka.
+- Sada se scope primenjuje u SQL (ALL/SECTOR/MY) u skladu sa session-om i rolama:
+  ADMIN -> ALL
+  SECTOR_ADMIN + REFERENT_* -> SECTOR (ako je moguće), inače MY (fail-closed)
+  ostali -> MY (fail-closed)
+- Fallback konekcija više NE ide na hardcoded data/db/bazas2.sqlite (sprečava “dve baze” problem),
+  već koristi core.db (connect_db/db_conn) ili core.config.DB_FILE.
+- Izgled (QSS), kolone, filteri, chip bar, status tint, sort, context menu: ostaje isto.
 """
 
 from __future__ import annotations
@@ -66,11 +51,6 @@ from PySide6.QtWidgets import (  # type: ignore
 )
 
 # -------------------- SR date/time display (FAIL-SAFE for this page) --------------------
-# Cilj: Metrologija dashboard UVEK prikazuje:
-# - datum: DD.MM.YYYY
-# - datetime: DD.MM.YYYY HH:MM (24h)
-# Ne diramo bazu, SQL. Samo display.
-
 try:
     from ui.utils.datetime_fmt import fmt_dt_sr as _base_fmt_dt_sr, fmt_date_sr as _base_fmt_date_sr  # type: ignore
 except Exception:
@@ -227,7 +207,6 @@ def _truncate_middle(s: str, left: int = 12, right: int = 6) -> str:
         return ss
     return f"{ss[:left]}…{ss[-right:]}"
 
-
 # -------------------- table copy utils (best-effort) --------------------
 try:
     from ui.utils.table_copy import (  # type: ignore
@@ -241,7 +220,6 @@ except Exception:  # pragma: no cover
 
     def copy_selected_cells(tbl: QTableWidget) -> None:
         return
-
 
 # -------------------- RBAC helpers (UI-level, fail-closed) --------------------
 try:
@@ -266,12 +244,49 @@ def _get_current_user_dict() -> Dict[str, Any]:
         return {}
 
 
+def _active_role_safe() -> str:
+    # koristi active_role ako postoji, pa fallback na user dict
+    try:
+        from core.session import active_role  # type: ignore
+        r = str(active_role() or "").strip().upper()
+        if r:
+            return r
+    except Exception:
+        pass
+    u = _get_current_user_dict()
+    return str(u.get("active_role") or u.get("role") or u.get("user_role") or "READONLY").strip().upper()
+
+
+def _current_sector_safe() -> str:
+    try:
+        from core.session import current_sector  # type: ignore
+        s = str(current_sector() or "").strip()
+        if s:
+            return s
+    except Exception:
+        pass
+    u = _get_current_user_dict()
+    return str(u.get("active_sector") or u.get("sector") or u.get("org_unit") or u.get("unit") or "").strip()
+
+
+def _effective_scope_from_session() -> str:
+    try:
+        from core.session import effective_scope  # type: ignore
+        return str(effective_scope() or "").strip().upper()
+    except Exception:
+        return ""
+
+
 def _actor_name_safe() -> str:
+    """
+    BITNO: ne vraćamo placeholder "user" za identitet (da ne match-uje tuđe).
+    Ako ne znamo ko si -> "" (fail-closed za MY filter).
+    """
     try:
         from core.session import actor_name  # type: ignore
-        return (actor_name() or "user").strip() or "user"
+        return (actor_name() or "").strip()
     except Exception:
-        return "user"
+        return ""
 
 
 def _actor_key_safe() -> str:
@@ -323,6 +338,8 @@ def _holder_matches_me(holder_value: Any) -> bool:
     if not h:
         return False
     cands = _identity_candidates()
+    if not cands:
+        return False
     for c in cands:
         if h == c:
             return True
@@ -360,10 +377,36 @@ def _wire_table_copy(table: QTableWidget) -> None:
     except Exception:
         pass
 
+# (FILENAME: ui/metrology_dashboard_page.py - END PART 1/3)
 
+# FILENAME: ui/metrology_dashboard_page.py
+# (FILENAME: ui/metrology_dashboard_page.py - START PART 2/3)
 # -------------------- DB helpers --------------------
+def _db_path_fallback() -> str:
+    # Jedno mesto za DB path fallback (sprečava “dve baze”)
+    try:
+        from core.config import DB_FILE  # type: ignore
+        return str(DB_FILE)
+    except Exception:
+        return "data/db/bazas2.sqlite"
+
+
 @contextmanager
 def _connect_db():
+    # 1) Prefer core.db.connect_db() (isti pattern kao u servisima)
+    try:
+        from core.db import connect_db  # type: ignore
+        with connect_db() as conn:
+            try:
+                conn.row_factory = sqlite3.Row
+            except Exception:
+                pass
+            yield conn
+            return
+    except Exception:
+        pass
+
+    # 2) Fallback core.db.db_conn() ako postoji
     try:
         from core.db import db_conn  # type: ignore
         with db_conn() as conn:
@@ -376,12 +419,18 @@ def _connect_db():
     except Exception:
         pass
 
-    conn = sqlite3.connect("data/db/bazas2.sqlite")
+    # 3) Last resort sqlite3 direct (ali sa DB_FILE)
+    conn = sqlite3.connect(_db_path_fallback())
     try:
         conn.row_factory = sqlite3.Row
     except Exception:
         pass
     try:
+        try:
+            conn.execute("PRAGMA busy_timeout=2500;")
+            conn.execute("PRAGMA foreign_keys=ON;")
+        except Exception:
+            pass
         yield conn
     finally:
         try:
@@ -421,6 +470,82 @@ def _pick_col(cols: List[str], candidates: Tuple[str, ...]) -> str:
         if c in s:
             return c
     return ""
+
+
+def _role_is_sector_pref(role: str) -> bool:
+    r = (role or "").strip().upper()
+    return r in ("SECTOR_ADMIN", "REFERENT_IT", "REFERENT_OS", "REFERENT_METRO")
+
+
+def _resolve_scope_for_dashboard(conn: sqlite3.Connection, *, col_sector: str, col_holder: str) -> str:
+    """
+    Scope resolve (bez menjanja UI):
+    - Session scope je primarni (ALL/SECTOR/MY)
+    - ALL samo ADMIN
+    - Sector-role preferira SECTOR kad je tehnički moguće (sector kolona + current_sector)
+    - Ako SECTOR nije moguće -> MY (ako je moguće), inače MY (pa će predicate postati 0=1)
+    """
+    role = _active_role_safe()
+    sc = _effective_scope_from_session()
+
+    if sc == "ALL" and role != "ADMIN":
+        sc = "SECTOR"
+    if sc not in ("ALL", "SECTOR", "MY"):
+        sc = "MY"
+
+    if role == "ADMIN":
+        return "ALL" if sc == "ALL" else sc
+
+    # sector feasibility
+    sector_ok = bool(col_sector) and bool(_current_sector_safe())
+    my_ok = bool(col_holder) and bool(_identity_candidates())
+
+    # sector roles prefer sector
+    if _role_is_sector_pref(role):
+        if sector_ok:
+            return "SECTOR"
+        return "MY" if my_ok else "MY"
+
+    # non-sector roles: follow session, with safe fallback
+    if sc == "SECTOR":
+        return "SECTOR" if sector_ok else ("MY" if my_ok else "MY")
+    if sc == "MY":
+        return "MY" if my_ok else "MY"
+    return "MY" if my_ok else "MY"
+
+
+def _scope_where_and_params(
+    conn: sqlite3.Connection,
+    *,
+    scope: str,
+    col_sector: str,
+    col_holder: str,
+) -> Tuple[str, List[Any]]:
+    """
+    Vraća SQL WHERE dodatak (string koji počinje sa AND...) + params.
+    Fail-closed: ako fali identitet/kolone -> AND 0=1.
+    """
+    sc = (scope or "").strip().upper()
+
+    if sc == "ALL":
+        return "", []
+
+    if sc == "SECTOR":
+        sec = _current_sector_safe()
+        if not (col_sector and sec):
+            return " AND 0=1", []
+        return f" AND LOWER(TRIM(COALESCE(a.{col_sector},''))) = LOWER(TRIM(?))", [sec]
+
+    # MY
+    cands = _identity_candidates()
+    if not (col_holder and cands):
+        return " AND 0=1", []
+    ors = []
+    params: List[Any] = []
+    for c in cands:
+        ors.append(f"LOWER(TRIM(COALESCE(a.{col_holder},''))) = ?")
+        params.append(c)
+    return " AND (" + " OR ".join(ors) + ")", params
 
 
 def _met_status(valid_until_iso: str, warn_days: int) -> str:
@@ -465,6 +590,10 @@ class MetroDashRow:
 
 
 def _fetch_dashboard_rows(warn_days: int = 30) -> List[MetroDashRow]:
+    """
+    VAŽNO: izgled i funkcije ostaju, ali sad je SQL scope-aware (sprečava curenje).
+    I dalje prikazujemo i sredstva bez metrologije (NEPOZNATO), ali samo u dozvoljenom scope-u.
+    """
     with _connect_db() as conn:
         if not _table_exists(conn, "assets") or not _table_exists(conn, "metrology_records"):
             return []
@@ -493,6 +622,7 @@ def _fetch_dashboard_rows(warn_days: int = 30) -> List[MetroDashRow]:
 
         last_time_col = col_assigned_at if col_assigned_at else col_updated
 
+        # SQL-level exclude retired/scrapped assets (postojeća funkcija, bez promene)
         where_retired = ""
         if col_status:
             where_retired = f"""
@@ -502,6 +632,12 @@ def _fetch_dashboard_rows(warn_days: int = 30) -> List[MetroDashRow]:
                 OR LOWER(COALESCE(a.{col_status},'')) IN ('retired','disposed','decommissioned','inactive','archived')
               )
             """
+
+        # ✅ NEW: scope predicate (ALL/SECTOR/MY)
+        scope = _resolve_scope_for_dashboard(conn, col_sector=col_sector, col_holder=col_holder)
+        where_scope, params_scope = _scope_where_and_params(
+            conn, scope=scope, col_sector=col_sector, col_holder=col_holder
+        )
 
         sel_rb = f"COALESCE(a.{col_rb}, NULL) AS rb," if col_rb else "NULL AS rb,"
 
@@ -553,11 +689,12 @@ def _fetch_dashboard_rows(warn_days: int = 30) -> List[MetroDashRow]:
           ON l.asset_uid = a.{col_uid}
         WHERE 1=1
         {where_retired}
+        {where_scope}
         ;
         """
 
         try:
-            rows = conn.execute(sql).fetchall()
+            rows = conn.execute(sql, tuple(params_scope)).fetchall()
         except Exception:
             return []
 
@@ -623,7 +760,10 @@ def _kpi_counts(rows: List[MetroDashRow]) -> Dict[str, int]:
             c["NEPOZNATO"] += 1
     return c
 
+# (FILENAME: ui/metrology_dashboard_page.py - END PART 2/3)
 
+# FILENAME: ui/metrology_dashboard_page.py
+# (FILENAME: ui/metrology_dashboard_page.py - START PART 3/3)
 # -------------------- THEME (PRO DARK) --------------------
 DASH_QSS = """
 QWidget#MetroDashRoot { background: #12141a; color: #e7e9f1; font-size: 12px; }
@@ -929,10 +1069,6 @@ class _Chip(QFrame):
         }
         """)
 
-# (FILENAME: ui/metrology_dashboard_page.py - END)  [PART 1/2]
-
-# FILENAME: ui/metrology_dashboard_page.py
-# (FILENAME: ui/metrology_dashboard_page.py - START)  [PART 2/2]
 
 class MetrologyDashboardPage(QWidget):
     COLS = [
@@ -962,7 +1098,6 @@ class MetrologyDashboardPage(QWidget):
         self.logger = logger
         self._rows: List[MetroDashRow] = []
         self._default_visual_order = list(range(len(self.COLS)))
-
         self._force_default_sort: bool = False
 
         top = QHBoxLayout()
@@ -1030,7 +1165,6 @@ class MetrologyDashboardPage(QWidget):
         self.btn_cols_default.setText("Kolone: default")
         self.btn_cols_default.setToolTip("Vrati raspored kolona na podrazumevani (samo prikaz).")
 
-        # ✅ NOVO: reset filtera (vrati SVE prikazano)
         self.btn_filters_reset = QToolButton()
         self.btn_filters_reset.setObjectName("ColsBtn")
         self.btn_filters_reset.setText("Reset filtera")
@@ -1045,7 +1179,7 @@ class MetrologyDashboardPage(QWidget):
         status_row.addWidget(self.btn_focus)
         status_row.addStretch(1)
         status_row.addWidget(self.btn_cols_default)
-        status_row.addWidget(self.btn_filters_reset)  # ✅
+        status_row.addWidget(self.btn_filters_reset)
 
         flt = QHBoxLayout()
         flt.setSpacing(14)
@@ -1088,7 +1222,7 @@ class MetrologyDashboardPage(QWidget):
 
         self.tbl = QTableWidget(0, len(self.COLS))
         self.tbl.setHorizontalHeaderLabels(self.COLS)
-        self.tbl.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)  # ✅ preciznije od QTableWidget.NoEditTriggers
         self.tbl.setAlternatingRowColors(True)
         self.tbl.setShowGrid(True)
         self.tbl.setGridStyle(Qt.SolidLine)
@@ -1128,7 +1262,6 @@ class MetrologyDashboardPage(QWidget):
         self.tbl.setColumnWidth(self.C_ASSIGNED, 160)
 
         _wire_table_copy(self.tbl)
-
         self.tbl.setItemDelegate(_RowStatusTintDelegate(self.tbl, status_col=self.C_STATUS, accent_px=3))
 
         self.tbl.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1164,8 +1297,6 @@ class MetrologyDashboardPage(QWidget):
 
         self.btn_focus.toggled.connect(self._on_focus_toggle)
         self.btn_cols_default.clicked.connect(self._reset_columns_default)
-
-        # ✅ reset filtera
         self.btn_filters_reset.clicked.connect(self._reset_filters_default)
 
         self.btn_open_asset.clicked.connect(self._open_asset)
@@ -1193,17 +1324,23 @@ class MetrologyDashboardPage(QWidget):
         return b
 
     def _reset_columns_default(self) -> None:
+        """
+        FIX: stabilniji restore ordera (bez vizuelne promene, samo tačnost).
+        """
         try:
             hdr = self.tbl.horizontalHeader()
-            for logical, visual in enumerate(self._default_visual_order):
-                hdr.moveSection(hdr.visualIndex(logical), visual)
+            # cilj: vizuelni indeks i treba da bude 0..n-1 za logičke sekcije
+            for target_visual in range(hdr.count()):
+                logical = target_visual  # default mapping (kao inicijalni)
+                cur_visual = hdr.visualIndex(logical)
+                if cur_visual != target_visual:
+                    hdr.moveSection(cur_visual, target_visual)
         except Exception:
             pass
 
     def _reset_filters_default(self) -> None:
         """
-        ✅ Reset filtera: vrati UI kontrole na default tako da se opet vidi SVE.
-        Ne menja podatke, ne menja SQLSQL, ne menja logiku — samo resetuje kontrole i pozove _apply_filter().
+        Reset filtera: vrati UI kontrole na default tako da se opet vidi SVE.
         """
         widgets = [
             self.btn_st_overdue, self.btn_st_due, self.btn_st_ok, self.btn_st_unknown,
@@ -1213,20 +1350,14 @@ class MetrologyDashboardPage(QWidget):
             for w in widgets:
                 w.blockSignals(True)
 
-            # default: fokus OFF + svi statusi ON
             self.btn_focus.setChecked(False)
             self.btn_st_overdue.setChecked(True)
             self.btn_st_due.setChecked(True)
             self.btn_st_ok.setChecked(True)
             self.btn_st_unknown.setChecked(True)
 
-            # default: sve, bez "moja"
             self.ck_my.setChecked(False)
-
-            # default: prazna pretraga
             self.ed_search.setText("")
-
-            # default: alarm 30
             self.cb_warn.setCurrentText("30")
 
         finally:
@@ -1236,7 +1367,6 @@ class MetrologyDashboardPage(QWidget):
                 except Exception:
                     pass
 
-        # default sort kao posle refresh-a
         self._force_default_sort = True
         self._apply_filter()
 
@@ -1286,7 +1416,7 @@ class MetrologyDashboardPage(QWidget):
         self.btn_open_asset.setEnabled(has)
         self.btn_open_met_list.setEnabled(has)
 
-    def _enabled_statuses(self) -> set[str]:
+    def _enabled_statuses(self) -> set:
         st = set()
         if self.btn_st_overdue.isChecked():
             st.add("ISTEKLO")
@@ -1633,4 +1763,4 @@ class MetrologyDashboardPage(QWidget):
         except Exception:
             pass
 
-# (FILENAME: ui/metrology_dashboard_page.py - END)  [PART 2/2]
+# (FILENAME: ui/metrology_dashboard_page.py - END PART 3/3)

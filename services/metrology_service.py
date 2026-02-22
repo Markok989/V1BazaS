@@ -1,5 +1,5 @@
 # FILENAME: services/metrology_service.py
-# (FILENAME: services/metrology_service.py - START PART 1/2)
+# (FILENAME: services/metrology_service.py - START PART 1/3)
 # -*- coding: utf-8 -*-
 """
 BazaS2 (offline) — services/metrology_service.py
@@ -16,20 +16,16 @@ RBAC (service-level, fail-closed):
 - metrology.manage -> ALL-scope (GLOBAL) bypass
 
 SCOPE (anti-"curenje"):
-- Jedini izvor istine: core.session.effective_scope() => ALL | SECTOR | MY
+- Primarno: core.session.effective_scope() => ALL | SECTOR | MY
 - Fail-safe: ALL je dozvoljen samo ADMIN-u (ako dođe ALL a nije admin -> SECTOR)
+- DOPUNA (po tvom zahtevu): SECTOR_ADMIN + REFERENT_* preferiraju SECTOR
+  čak i ako session vrati MY — ali SAMO ako je SECTOR tehnički moguć (assets tabela + sector kolona + current_sector).
+  Ako nije moguće, vraćamo se na MY (fail-closed, ali funkcionalno).
 - manage -> implicitno ALL (ali i dalje mora metrology.view/edit za read/write gate)
 - SECTOR/MY -> filtriranje ide SQL-first preko JOIN assets + predicate
 - Orphan records:
     * ALL/manage: vidi i orphan (metrology_records bez assets reda)
     * SECTOR/MY: orphan se NE vidi (fail-closed)
-
-Spec (tvoj zahtev, i dalje ispunjen):
-- REFERENT_METRO:
-    * prefer SECTOR scope (ako postoji sektor i kolona)
-    * ako scope padne (nema sektora/kolone) -> MY je fail-closed u effective_scope (kod tebe u session/rbac)
-    * dodatni filter: ako postoji assets metrology flag kolona -> tražimo flag=1 (samo za REFERENT_METRO)
-- Ostali bez manage: scope diktira effective_scope(), a RBAC ih dalje ograničava.
 
 Kompatibilnost sa UI:
 - list_metrology_records(q, limit, warn_days)
@@ -40,6 +36,11 @@ MY API (kompat):
 - list_metrology_records_my(...) (fail-closed),
   baziran na assets_service.list_assets_my() → asset_uid ∈ MY.
 - FIX: sprečen SQLite "too many SQL variables" u MY list (TEMP table approach).
+
+Senior hardening (2026-02):
+- FIX: _actor_key/_actor_name za MY identitet više ne koriste "user" placeholder (sprečava lažna poklapanja).
+- FIX: Centralizovan _resolved_scope(conn) sa SECTOR preferencom za sektor-role i sigurnim fallbackom na MY.
+- Stabilnost: manje “0=1” slučajeva kada SECTOR nije moguć (umesto toga MY fallback).
 """
 
 from __future__ import annotations
@@ -137,50 +138,57 @@ def _active_role_safe() -> str:
         try:
             from core.session import get_current_user  # type: ignore
             u = get_current_user() or {}
-            return str(u.get("role") or u.get("user_role") or "READONLY").strip().upper()
+            return str(u.get("active_role") or u.get("role") or u.get("user_role") or "READONLY").strip().upper()
         except Exception:
             return "READONLY"
 
 
-def _effective_scope_safe() -> str:
+def _effective_scope_from_session() -> str:
     """
-    Jedini izvor istine: core.session.effective_scope() -> ALL/SECTOR/MY
-    Fail-safe:
-      - ALL je dozvoljen samo ADMIN-u
-      - ako scope nije dostupan -> MY (najbezbednije)
+    Primarni izvor: core.session.effective_scope() -> ALL/SECTOR/MY.
+    Ako nije dostupno ili vrati glupost -> "" (pa dalje radimo bezbedan fallback).
     """
     try:
         from core.session import effective_scope  # type: ignore
         sc = str(effective_scope() or "").strip().upper()
-    except Exception:
-        sc = ""
-
-    role = _active_role_safe()
-    if sc == "ALL" and role != "ADMIN":
-        return "SECTOR"
-    if sc in ("ALL", "SECTOR", "MY"):
         return sc
-    return "MY"
+    except Exception:
+        return ""
 
 
 def _can_manage() -> bool:
     return _safe_can(PERM_METRO_MANAGE)
 
 
-def _actor_name_safe() -> str:
+def _actor_name_for_audit() -> str:
     try:
         from core.session import actor_name  # type: ignore
-        return (actor_name() or "user").strip() or "user"
+        return (actor_name() or "").strip() or "user"
     except Exception:
         return "user"
 
 
-def _actor_key_safe() -> str:
+def _actor_key_for_scope() -> str:
+    """
+    KRITIČNO: za MY identitet ne vraćamo placeholder "user" (to je opasno).
+    Ako nemamo key, vrati "" (fail-closed).
+    """
     try:
         from core.session import actor_key  # type: ignore
-        return (actor_key() or "user").strip() or "user"
+        return (actor_key() or "").strip()
     except Exception:
-        return "user"
+        return ""
+
+
+def _actor_name_for_scope() -> str:
+    """
+    Za MY identitet: bez placeholder-a.
+    """
+    try:
+        from core.session import actor_name  # type: ignore
+        return (actor_name() or "").strip()
+    except Exception:
+        return ""
 
 
 def _current_sector_safe() -> str:
@@ -203,16 +211,23 @@ def _is_referent_metro() -> bool:
     return _active_role_safe() == "REFERENT_METRO"
 
 
+def _is_sector_role(role: Optional[str] = None) -> bool:
+    """
+    Role koje po tvojoj specifikaciji treba da vide DASHBOARD u okviru sektora:
+    - SECTOR_ADMIN
+    - referenti (IT/OS/METRO)
+    """
+    r = (role or _active_role_safe()).strip().upper()
+    return r in ("SECTOR_ADMIN", "REFERENT_IT", "REFERENT_OS", "REFERENT_METRO")
+
+
 # -------------------- DB/schema helpers --------------------
 def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _is_safe_ident(name: str) -> bool:
-    """
-    SQLite ident hardening (defanzivno).
-    Dozvoli samo [A-Za-z0-9_].
-    """
+    """SQLite ident hardening (defanzivno). Dozvoli samo [A-Za-z0-9_]."""
     if not name:
         return False
     for ch in name:
@@ -240,7 +255,6 @@ def _cols(conn: sqlite3.Connection, table: str) -> List[str]:
         rows = conn.execute(f"PRAGMA table_info({table});").fetchall()
         out: List[str] = []
         for r in rows:
-            # sqlite Row ili tuple
             try:
                 out.append(str(r["name"]))  # type: ignore[index]
             except Exception:
@@ -255,8 +269,8 @@ def _cols(conn: sqlite3.Connection, table: str) -> List[str]:
 
 def ensure_metrology_schema() -> None:
     """
-    Kreira šemu jednom po procesu (perf),
-    ali fail-closed: ako padne, sledeći poziv će opet pokušati.
+    Kreira šemu jednom po procesu (perf).
+    Fail-safe: ako padne, sledeći poziv će opet pokušati (SCHEMA_READY ostaje False).
     """
     global _SCHEMA_READY
     if _SCHEMA_READY:
@@ -311,7 +325,6 @@ def ensure_metrology_schema() -> None:
 
 
 def _make_met_uid() -> str:
-    # zadržavamo format (kompatibilnost), uz mikrosekunde za minimalnu šansu kolizije
     return "M-" + datetime.now().strftime("%Y%m%d%H%M%S%f")
 
 
@@ -421,7 +434,10 @@ def status_for_valid_until(valid_until: Any, warn_days: int = 30) -> str:
         return "ISTICE"
     return "OK"
 
+# (FILENAME: services/metrology_service.py - END PART 1/3)
 
+# FILENAME: services/metrology_service.py
+# (FILENAME: services/metrology_service.py - START PART 2/3)
 # -------------------- Scope helpers (SQL-first) --------------------
 def _assets_sector_col(conn: sqlite3.Connection) -> str:
     if not _table_exists(conn, "assets"):
@@ -467,18 +483,18 @@ def _norm(s: str) -> str:
 def _identity_candidates() -> List[str]:
     """
     Kandidati identiteta za MY-scope:
-    - actor_key (npr. user#12 ili username)
-    - display_name
+    - actor_key (username/id)  [bez placeholder-a]
+    - actor_name (display)     [bez placeholder-a]
     - username/login/email/id...
     Vraća NORMALIZOVANO (casefold+trim), bez duplikata.
     """
     u = _get_current_user_dict()
     cand: List[str] = []
 
-    ak = _actor_key_safe()
+    ak = _actor_key_for_scope()
     if ak:
         cand.append(ak)
-    an = _actor_name_safe()
+    an = _actor_name_for_scope()
     if an:
         cand.append(an)
 
@@ -514,17 +530,7 @@ def _clamp_limit(limit: Any, default: int, max_limit: int) -> int:
     return lim
 
 
-def _sector_scope_available(conn: sqlite3.Connection) -> bool:
-    """
-    SECTOR scope je moguć samo ako:
-    - effective_scope() == SECTOR
-    - postoji current_sector i assets sector kolona
-    - imamo assets.metrology.view (za referent metro spec)
-    Napomena: ostale role sa SECTOR scope-om mogu proći i bez assets.metrology.view,
-    ali referent metro ga zahteva (tvoj zahtev).
-    """
-    if _effective_scope_safe() != "SECTOR":
-        return False
+def _sector_possible(conn: sqlite3.Connection) -> bool:
     if not _table_exists(conn, "assets"):
         return False
     if not _assets_sector_col(conn):
@@ -537,19 +543,64 @@ def _sector_scope_available(conn: sqlite3.Connection) -> bool:
     return True
 
 
+def _my_possible(conn: sqlite3.Connection) -> bool:
+    if not _table_exists(conn, "assets"):
+        return False
+    if not _assets_holder_col(conn):
+        return False
+    if not (_safe_can(PERM_ASSETS_MY_VIEW) or _safe_can("assets.view")):
+        return False
+    return bool(_identity_candidates())
+
+
+def _resolved_scope(conn: sqlite3.Connection) -> str:
+    """
+    Centralno rešavanje scope-a sa bezbednim fallbackom:
+
+    1) Uzimamo scope iz session (ALL/SECTOR/MY).
+    2) ALL je dozvoljen samo ADMIN-u; u suprotnom -> SECTOR.
+    3) Ako je scope=MY ali rola je "sector role" (SECTOR_ADMIN/REFERENT_*),
+       preferiramo SECTOR *ako je tehnički moguć*; inače ostajemo na MY.
+    4) Ako je scope=SECTOR ali nije moguće (nema kolone/sektora), fallback na MY ako može.
+    5) Uvek fail-closed: ako MY nije moguće, kasnije predicate padne na 0=1.
+    """
+    role = _active_role_safe()
+    sc = _effective_scope_from_session()
+
+    if sc == "ALL" and role != "ADMIN":
+        sc = "SECTOR"
+    if sc not in ("ALL", "SECTOR", "MY"):
+        sc = "MY"
+
+    if sc == "ALL":
+        return "ALL"
+
+    # prefer SECTOR for sector-role, even if session says MY (your requirement)
+    if sc == "MY" and _is_sector_role(role):
+        if _sector_possible(conn):
+            return "SECTOR"
+        return "MY"
+
+    # if session says SECTOR but not possible, fallback to MY if possible
+    if sc == "SECTOR" and (not _sector_possible(conn)):
+        return "MY" if _my_possible(conn) else "MY"
+
+    return sc
+
+
 def _sql_scope_predicate(conn: sqlite3.Connection) -> Tuple[str, List[Any]]:
     """
     Vraća (where_sql, params) za scope nad assets tabelom, za JOIN filtriranje.
 
     Pravila:
-    - ALL: 1=1 (ali fail-safe je u effective_scope_safe)
+    - ALL: 1=1
     - SECTOR: sector match; + (referent_metro && flag postoji) => flag=1
     - MY: holder match (casefold); + (referent_metro && flag postoji) => flag=1
 
     FAIL-CLOSED:
     - ako fali assets ili potrebne kolone/identitet -> 0=1
     """
-    sc = _effective_scope_safe()
+    sc = _resolved_scope(conn)
 
     if sc == "ALL":
         return "1=1", []
@@ -558,26 +609,28 @@ def _sql_scope_predicate(conn: sqlite3.Connection) -> Tuple[str, List[Any]]:
         return "0=1", []
 
     if sc == "SECTOR":
-        if not _sector_scope_available(conn):
-            return "0=1", []
         scol = _assets_sector_col(conn)
         sec = _current_sector_safe()
         if not (scol and sec):
-            return "0=1", []
+            # pokušaj MY fallback pre nego što ubijemo sve
+            if _my_possible(conn):
+                sc = "MY"
+            else:
+                return "0=1", []
 
-        base = f"LOWER(TRIM(COALESCE(a.{scol},''))) = LOWER(TRIM(?))"
-        params: List[Any] = [sec]
+        if sc == "SECTOR":
+            base = f"LOWER(TRIM(COALESCE(a.{scol},''))) = LOWER(TRIM(?))"
+            params: List[Any] = [sec]
 
-        # opcioni flag filter: samo za REFERENT_METRO
-        if _is_referent_metro():
-            mcol = _assets_is_metro_col(conn)
-            if mcol:
-                base = f"({base}) AND COALESCE(a.{mcol},0) = 1"
+            if _is_referent_metro():
+                mcol = _assets_is_metro_col(conn)
+                if mcol:
+                    base = f"({base}) AND COALESCE(a.{mcol},0) = 1"
 
-        return base, params
+            return base, params
 
     # MY scope
-    if not _safe_can(PERM_ASSETS_MY_VIEW) and (not _safe_can("assets.view")):
+    if not (_safe_can(PERM_ASSETS_MY_VIEW) or _safe_can("assets.view")):
         return "0=1", []
 
     hcol = _assets_holder_col(conn)
@@ -596,7 +649,6 @@ def _sql_scope_predicate(conn: sqlite3.Connection) -> Tuple[str, List[Any]]:
 
     where = "(" + " OR ".join(ors) + ")"
 
-    # opcioni flag filter: samo za REFERENT_METRO
     if _is_referent_metro():
         mcol2 = _assets_is_metro_col(conn)
         if mcol2:
@@ -612,7 +664,7 @@ def _must_read_scope(conn: sqlite3.Connection, asset_uid: str) -> None:
     """
     _must(PERM_METRO_VIEW)
 
-    if _effective_scope_safe() == "ALL" or _can_manage():
+    if _resolved_scope(conn) == "ALL" or _can_manage():
         return
 
     au = (asset_uid or "").strip()
@@ -633,19 +685,16 @@ def _must_read_scope(conn: sqlite3.Connection, asset_uid: str) -> None:
 
 def _must_write_scope(conn: sqlite3.Connection, asset_uid: str) -> None:
     _must(PERM_METRO_EDIT)
-    if _effective_scope_safe() == "ALL" or _can_manage():
+    if _resolved_scope(conn) == "ALL" or _can_manage():
         return
     _must_read_scope(conn, asset_uid)
 
+# (FILENAME: services/metrology_service.py - END PART 2/3)
 
+# FILENAME: services/metrology_service.py
+# (FILENAME: services/metrology_service.py - START PART 3/3)
 # -------------------- MY API helpers --------------------
 def _extract_asset_uids(rows: Any) -> List[str]:
-    """
-    Prihvata listu dict-ova ili drugih struktura; vadi asset_uid i vraća unique listu.
-
-    - tolerantno čitanje (dict ključevi: asset_uid/uid/assetUid),
-      tuple/list: pokušaj [0] ako izgleda kao string.
-    """
     out: List[str] = []
     seen = set()
 
@@ -687,11 +736,6 @@ def _extract_asset_uids(rows: Any) -> List[str]:
 
 
 def _my_asset_uids_via_assets_service(limit: int = 5000) -> List[str]:
-    """
-    Fail-closed:
-    - ako import ne uspe → []
-    - ako nema prava za assets.my.view (ili assets.view) → []
-    """
     if not (_safe_can(PERM_ASSETS_MY_VIEW) or _safe_can("assets.view")):
         return []
 
@@ -733,10 +777,8 @@ def get_metrology_record(met_uid: str, warn_days: int = 30) -> Optional[Dict[str
 
         au = str(rec.get("asset_uid") or "").strip()
         if not au:
-            # fail-closed: ne izdajemo zapis bez asset_uid
             return None
 
-        # Scope check (ALL/manage dozvoljava; ostali moraju kroz assets)
         _must_read_scope(conn, au)
 
         rec["status"] = status_for_valid_until(rec.get("valid_until", ""), warn_days=warn_days)
@@ -749,14 +791,6 @@ def list_metrology_records(
     warn_days: int = 30,
     include_deleted: bool = False,
 ) -> List[Dict[str, Any]]:
-    """
-    Kompatibilno sa MetrologyPage: list (q filter) + status.
-    Scope enforce u servisu (ALL/SECTOR/MY).
-
-    VAŽNO:
-    - ALL/manage: listaj direktno metrology_records (orphan-safe, bez zavisnosti od assets)
-    - SECTOR/MY: JOIN assets + scope predicate (fail-closed)
-    """
     ensure_metrology_schema()
     _require_login("metrology.list_metrology_records")
     _must(PERM_METRO_VIEW)
@@ -765,9 +799,9 @@ def list_metrology_records(
     lim = _clamp_limit(limit, 5000, _MAX_LIST_LIMIT)
 
     with connect_db() as conn:
-        sc = _effective_scope_safe()
+        sc = _resolved_scope(conn)
 
-        # ✅ ALL (ili manage): listaj direktno metrology_records (orphan-safe)
+        # ALL (ili manage): direktno metrology_records (orphan-safe)
         if sc == "ALL" or _can_manage():
             where = []
             params: List[Any] = []
@@ -869,10 +903,6 @@ def list_metrology_records(
 
         return out2
 
-# (FILENAME: services/metrology_service.py - END PART 1/2)
-
-# FILENAME: services/metrology_service.py
-# (FILENAME: services/metrology_service.py - START PART 2/2)
 
 def list_metrology_records_my(
     q: str = "",
@@ -880,18 +910,6 @@ def list_metrology_records_my(
     warn_days: int = 30,
     include_deleted: bool = False,
 ) -> List[Dict[str, Any]]:
-    """
-    MY API: metrology samo za sredstva koja korisnik trenutno duži.
-
-    Fail-closed:
-    - zahteva login + metrology.view
-    - zahteva MY asset_uid-eve preko assets_service.list_assets_my()
-    - stabilno rešava SQLite "too many SQL variables" preko TEMP tabele
-
-    Napomena:
-    - Ovo je eksplicitni MY endpoint (koristi se u "Moj Dashboard" i sličnim UI tokovima).
-    - Ne preskače scope logiku: to je namerno “hard MY”.
-    """
     ensure_metrology_schema()
     _require_login("metrology.list_metrology_records_my")
     _must(PERM_METRO_VIEW)
@@ -899,7 +917,6 @@ def list_metrology_records_my(
     qq = (q or "").strip()
     lim = _clamp_limit(limit, 5000, _MAX_LIST_LIMIT)
 
-    # uzmi MY asset_uids (povećaj fetch limit razumno kada korisnik traži veći list)
     fetch_lim = max(5000, min(_MAX_MY_ASSETS_FETCH, lim))
     my_uids = _my_asset_uids_via_assets_service(limit=fetch_lim)
     if not my_uids:
@@ -926,7 +943,6 @@ def list_metrology_records_my(
             params.extend([like, like, like, like, like, like])
 
         try:
-            # TEMP tabela je po-konekciji; bezbedno i brzo za veće liste
             conn.execute("CREATE TEMP TABLE IF NOT EXISTS tmp_my_assets(uid TEXT PRIMARY KEY);")
             conn.execute("DELETE FROM tmp_my_assets;")
             conn.executemany(
@@ -967,10 +983,6 @@ def list_metrology_records_for_asset(
     warn_days: int = 30,
     include_deleted: bool = False,
 ) -> List[Dict[str, Any]]:
-    """
-    Vraća metrology zapise za konkretan asset_uid.
-    Scope: user mora imati pravo da vidi taj asset u metrologiji.
-    """
     ensure_metrology_schema()
     _require_login("metrology.list_metrology_records_for_asset")
     _must(PERM_METRO_VIEW)
@@ -982,8 +994,8 @@ def list_metrology_records_for_asset(
     lim = _clamp_limit(limit, 200, _MAX_AUDIT_LIMIT)
 
     with connect_db() as conn:
-        # ALL/manage: ne treba assets provera; SECTOR/MY: mora kroz _must_read_scope (JOIN assets)
-        if _effective_scope_safe() != "ALL" and (not _can_manage()):
+        # ALL/manage: može bez assets; ostali moraju scope check (fail-closed)
+        if _resolved_scope(conn) != "ALL" and (not _can_manage()):
             _must_read_scope(conn, au)
 
         where = "asset_uid=?"
@@ -1012,7 +1024,7 @@ def list_metrology_records_for_asset(
         return out
 
 
-# (bonus) aliasi da ne puca ako negde koristiš drugo ime
+# aliasi da ne puca
 list_metrology_for_asset = list_metrology_records_for_asset
 list_metrology_by_asset_uid = list_metrology_records_for_asset
 
@@ -1036,8 +1048,7 @@ def list_metrology_audit(met_uid: str, limit: int = 200) -> List[Dict[str, Any]]
         if not asset_uid:
             return []
 
-        # ALL/manage: može bez assets; ostali moraju scope check (a) (fail-closed)
-        if _effective_scope_safe() != "ALL" and (not _can_manage()):
+        if _resolved_scope(conn) != "ALL" and (not _can_manage()):
             _must_read_scope(conn, asset_uid)
 
         rows = conn.execute(
@@ -1087,7 +1098,7 @@ def create_metrology_record(
         raise ValueError("asset_uid je obavezan.")
     ct = _validate_calib_type(calib_type)
 
-    actor_eff = _actor_name_safe()
+    actor_eff = _actor_name_for_audit()
     met_uid = _make_met_uid()
     now = _now_str()
 
@@ -1106,7 +1117,6 @@ def create_metrology_record(
     }
 
     with connect_db() as conn:
-        # write gate + scope gate (ALL/manage bypass; SECTOR/MY require assets & predicate)
         _must_write_scope(conn, au)
 
         try:
@@ -1158,7 +1168,7 @@ def update_metrology_record(
     if not mu:
         return False
 
-    actor_eff = _actor_name_safe()
+    actor_eff = _actor_name_for_audit()
     ct = _validate_calib_type(calib_type)
     now = _now_str()
 
@@ -1220,7 +1230,7 @@ def delete_metrology_record(
     if not mu:
         return False
 
-    actor_eff = _actor_name_safe()
+    actor_eff = _actor_name_for_audit()
 
     with connect_db() as conn:
         before_row = conn.execute("SELECT * FROM metrology_records WHERE met_uid=? LIMIT 1;", (mu,)).fetchone()
@@ -1269,4 +1279,4 @@ __all__ = [
     "delete_metrology_record",
 ]
 
-# (FILENAME: services/metrology_service.py - END PART 2/2)
+# (FILENAME: services/metrology_service.py - END PART 3/3)

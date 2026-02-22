@@ -1145,3 +1145,30 @@ Traceback (most recent call last):
     
 KeyboardInterrupt
 2026-02-22 22:21:50 | ERROR | BazaS2 | run=f621ed2ecc | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 22:44:41 | ERROR | BazaS2 | run=7dea50f6f8 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 22:45:08 | ERROR | BazaS2 | run=7dea50f6f8 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 22:57:05 | ERROR | BazaS2 | run=33227a597c | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 22:57:12 | ERROR | BazaS2 | run=33227a597c | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 22:58:02 | ERROR | BazaS2 | run=33227a597c | user=- | role=- | Dashboard refresh partial issues: Met alarms: ambiguous column name: updated_at
+2026-02-22 22:58:02 | ERROR | BazaS2 | run=33227a597c | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:02:25 | CRITICAL | BazaS2 | run=33227a597c | user=- | role=- | UNHANDLED EXCEPTION (sys.excepthook)
+Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 780, in eventFilter
+    def eventFilter(self, obj, ev):  # type: ignore[override]
+    
+KeyboardInterrupt
+2026-02-22 23:02:48 | ERROR | BazaS2 | run=8564e3b379 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:03:07 | ERROR | BazaS2 | run=8564e3b379 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:03:40 | ERROR | BazaS2 | run=9e7bcb4edd | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:03:47 | ERROR | BazaS2 | run=9e7bcb4edd | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:08:52 | ERROR | BazaS2 | run=0c927b8847 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:09:24 | ERROR | BazaS2 | run=0c927b8847 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:09:44 | ERROR | BazaS2 | run=0c927b8847 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:11:54 | ERROR | BazaS2 | run=0c927b8847 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:12:07 | ERROR | BazaS2 | run=0c927b8847 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:17:33 | ERROR | BazaS2 | run=34e25869fc | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:18:03 | ERROR | BazaS2 | run=34e25869fc | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:20:27 | ERROR | BazaS2 | run=34e25869fc | user=- | role=- | Dashboard refresh partial issues: Met alarms: ambiguous column name: updated_at
+2026-02-22 23:20:27 | ERROR | BazaS2 | run=34e25869fc | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 23:20:35 | ERROR | BazaS2 | run=34e25869fc | user=- | role=- | Dashboard refresh partial issues: Met alarms: ambiguous column name: updated_at
+2026-02-22 23:20:37 | ERROR | BazaS2 | run=34e25869fc | user=- | role=- | Dashboard refresh partial issues: Met alarms: ambiguous column name: updated_at

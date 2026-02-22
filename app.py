@@ -17,6 +17,11 @@ Dodato / unapređeno:
 UI/UX poboljšanja:
 - MainWindow: QSplitter (nav <-> content) + pamćenje splitter stanja
 - Dialog policy: Windows-like resize (W+H) + Min/Max dugmad (bez scroll-wrap, bez belila)
+
+REGEN (ovaj patch):
+- ✅ "Metrologija Dashboard" je vidljiv SVIMA koji imaju metrology.view,
+  u okviru svojih prava (scope se rešava u dashboard modulu).
+  ADMIN vidi ALL, sector/admin i referenti SECTOR (ako dostupno), ostali MY (fail-closed).
 """
 
 from __future__ import annotations
@@ -57,6 +62,7 @@ from core.rbac import (  # type: ignore
     PERM_AUDIT_VIEW,
     PERM_USERS_VIEW,
     PERM_SETTINGS_VIEW,
+    PERM_METRO_VIEW,   # ✅ NEW: da možemo da prikažemo Metrologija Dashboard svima sa metrology.view
 )
 
 from services.users_service import ensure_users_schema  # type: ignore
@@ -1021,7 +1027,8 @@ def start_ui(logger: logging.Logger) -> None:
                 f"users_view={int(self._safe_can(PERM_USERS_VIEW))}; "
                 f"settings_view={int(self._safe_can(PERM_SETTINGS_VIEW))}; "
                 f"assets_create={int(self._safe_can(PERM_ASSETS_CREATE))}; "
-                f"assign_create={int(self._safe_can(PERM_ASSIGN_CREATE))}"
+                f"assign_create={int(self._safe_can(PERM_ASSIGN_CREATE))}; "
+                f"metrology_view={int(self._safe_can(PERM_METRO_VIEW))}"
             )
 
         def _refresh_role_widgets(self) -> None:
@@ -1120,20 +1127,33 @@ def start_ui(logger: logging.Logger) -> None:
             _sync_last_login_user_from_session()
             reason = self._ui_mode_reason()
 
+            # ✅ Jedino pravilo za prikaz dashboard-a u meniju:
+            #   ako korisnik ima metrology.view -> vidi "Metrologija Dashboard"
+            show_metro_dash = bool(self._safe_can(PERM_METRO_VIEW))
+
             self.nav.blockSignals(True)
             try:
                 self.nav.clear()
                 self._clear_pages()
 
                 if self._is_metro_referent():
-                    self.nav.addItems(["Metrologija Dashboard", "Metrologija", "Moj Dashboard", "Moja oprema", "Podešavanja"])
-                    page_metro_dashboard = MetrologyDashboardPage(self.logger)
-                    page_metrology = MetrologyPage(self.logger)
-                    page_my_dashboard = DashboardPage(self.logger, scope_mode="my", on_go_assets=lambda: self._nav_go_by_text("Moja oprema"))
-                    page_my_assets = MyAssetsPage(self.logger)
-                    page_settings = SettingsPage(self.logger)
+                    labels: List[str] = []
+                    widgets: List[QWidget] = []
 
-                    for w in [page_metro_dashboard, page_metrology, page_my_dashboard, page_my_assets, page_settings]:
+                    if show_metro_dash:
+                        labels.append("Metrologija Dashboard")
+                        widgets.append(MetrologyDashboardPage(self.logger))
+
+                    labels += ["Metrologija", "Moj Dashboard", "Moja oprema", "Podešavanja"]
+                    widgets += [
+                        MetrologyPage(self.logger),
+                        DashboardPage(self.logger, scope_mode="my", on_go_assets=lambda: self._nav_go_by_text("Moja oprema")),
+                        MyAssetsPage(self.logger),
+                        SettingsPage(self.logger),
+                    ]
+
+                    self.nav.addItems(labels)
+                    for w in widgets:
                         self.pages.addWidget(w)
 
                     self.nav.setCurrentRow(0)
@@ -1142,12 +1162,21 @@ def start_ui(logger: logging.Logger) -> None:
                     return
 
                 if self._is_basic_user():
-                    self.nav.addItems(["Moj Dashboard", "Moja oprema", "Podešavanja"])
-                    page_dashboard = DashboardPage(self.logger, scope_mode="my", on_go_assets=lambda: self._nav_go_by_text("Moja oprema"))
-                    page_my_assets = MyAssetsPage(self.logger)
-                    page_settings = SettingsPage(self.logger)
+                    labels2: List[str] = ["Moj Dashboard"]
+                    widgets2: List[QWidget] = [
+                        DashboardPage(self.logger, scope_mode="my", on_go_assets=lambda: self._nav_go_by_text("Moja oprema")),
+                    ]
 
-                    for w in [page_dashboard, page_my_assets, page_settings]:
+                    # ✅ BASIC vidi metrology dashboard samo ako ima metrology.view
+                    if show_metro_dash:
+                        labels2.append("Metrologija Dashboard")
+                        widgets2.append(MetrologyDashboardPage(self.logger))
+
+                    labels2 += ["Moja oprema", "Podešavanja"]
+                    widgets2 += [MyAssetsPage(self.logger), SettingsPage(self.logger)]
+
+                    self.nav.addItems(labels2)
+                    for w in widgets2:
                         self.pages.addWidget(w)
 
                     self.nav.setCurrentRow(0)
@@ -1155,19 +1184,30 @@ def start_ui(logger: logging.Logger) -> None:
                     self.statusBar().showMessage(f"DB: {DB_FILE} | Offline: ON | User: {_actor_name()} | Mode: BASIC | {reason}")
                     return
 
-                self.nav.addItems(["Dashboard", "Sredstva", "Zaduženja", "Audit", "Metrologija", "Korisnici", "Podešavanja", "Moj Dashboard", "Moja oprema"])
-
+                # FULL UI
+                labels3: List[str] = ["Dashboard", "Sredstva", "Zaduženja", "Audit"]
                 page_dashboard = DashboardPage(self.logger, on_go_assets=lambda: self._nav_go_by_text("Sredstva"), on_go_assign=lambda: self._nav_go_by_text("Zaduženja"), scope_mode="global")
                 page_assets = AssetsPage(self.logger)
                 page_assignments = AssignmentsPage(self.logger, page_assets)
                 page_audit = AuditPage(self.logger)
-                page_metrology = MetrologyPage(self.logger)
-                page_users = UsersPage(self.logger)
-                page_settings = SettingsPage(self.logger)
-                page_my_dashboard = DashboardPage(self.logger, scope_mode="my", on_go_assets=lambda: self._nav_go_by_text("Moja oprema"))
-                page_my_assets = MyAssetsPage(self.logger)
 
-                for w in [page_dashboard, page_assets, page_assignments, page_audit, page_metrology, page_users, page_settings, page_my_dashboard, page_my_assets]:
+                widgets3: List[QWidget] = [page_dashboard, page_assets, page_assignments, page_audit]
+
+                if show_metro_dash:
+                    labels3.append("Metrologija Dashboard")
+                    widgets3.append(MetrologyDashboardPage(self.logger))
+
+                labels3 += ["Metrologija", "Korisnici", "Podešavanja", "Moj Dashboard", "Moja oprema"]
+                widgets3 += [
+                    MetrologyPage(self.logger),
+                    UsersPage(self.logger),
+                    SettingsPage(self.logger),
+                    DashboardPage(self.logger, scope_mode="my", on_go_assets=lambda: self._nav_go_by_text("Moja oprema")),
+                    MyAssetsPage(self.logger),
+                ]
+
+                self.nav.addItems(labels3)
+                for w in widgets3:
                     self.pages.addWidget(w)
 
                 self.nav.setCurrentRow(0)
@@ -1186,8 +1226,7 @@ def start_ui(logger: logging.Logger) -> None:
         def _logout(self) -> None:
             """
             KRITIČNO (fail-closed):
-            - Prethodno: ako korisnik otkaže login posle odjave, app ostaje otvoren bez validnog user-a.
-            - Sada: ako login nije uspešan -> zatvori prozor i ugasi aplikaciju.
+            - Ako korisnik otkaže login posle odjave, app ne sme ostati bez validnog user-a.
             """
             if QMessageBox.question(self, "Odjava", "Odjavi se i vrati na prijavu?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
                 return
@@ -1204,7 +1243,6 @@ def start_ui(logger: logging.Logger) -> None:
 
             dlg = LoginDialog(self, logger=self.logger)
             if dlg.exec() != QDialog.Accepted:
-                # FAIL-CLOSED: nema validnog user-a => izlaz iz app-a
                 try:
                     self.close()
                 except Exception:
@@ -1217,7 +1255,6 @@ def start_ui(logger: logging.Logger) -> None:
 
             u = dlg.selected_user()
             if not u:
-                # FAIL-CLOSED
                 try:
                     self.close()
                 except Exception:
@@ -1228,7 +1265,6 @@ def start_ui(logger: logging.Logger) -> None:
                     pass
                 return
 
-            # enforce dict payload (session očekuje dict)
             if not isinstance(u, dict):
                 try:
                     u = dict(u)  # type: ignore[arg-type]
@@ -1268,7 +1304,19 @@ def start_ui(logger: logging.Logger) -> None:
             it = self.nav.item(row)
             if it is not None and not (it.flags() & Qt.ItemIsEnabled):
                 return
+
             self.pages.setCurrentIndex(row)
+
+            # ✅ AUTO-REFRESH samo za Metrologija Dashboard (dugme "Osveži" ostaje u UI)
+            try:
+                label = (it.text() if it is not None else "") or ""
+                if label.strip() == "Metrologija Dashboard":
+                    w = self.pages.widget(row)
+                    rf = getattr(w, "refresh", None)
+                    if callable(rf):
+                        QTimer.singleShot(0, rf)  # non-blocking, UI-friendly
+            except Exception:
+                pass
 
     app = QApplication(sys.argv)
 
@@ -1425,3 +1473,4 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 # (FILENAME: app.py - REGEN - END)  [PART 2/2]
+# FILENAME: app.py
