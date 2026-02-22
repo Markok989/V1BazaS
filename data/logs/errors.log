@@ -1133,3 +1133,15 @@ KeyboardInterrupt
 2026-02-22 20:13:10 | ERROR | BazaS2 | run=f78d8a747b | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
 2026-02-22 20:46:49 | ERROR | BazaS2 | run=5fdec6b786 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
 2026-02-22 21:26:16 | ERROR | BazaS2 | run=4be4b294fc | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 22:01:25 | ERROR | BazaS2 | run=13818d9ffb | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 22:03:12 | ERROR | BazaS2 | run=7e148d0160 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 22:03:33 | ERROR | BazaS2 | run=7e148d0160 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 22:04:27 | ERROR | BazaS2 | run=7e148d0160 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 22:14:43 | ERROR | BazaS2 | run=e09539d57a | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 22:21:33 | CRITICAL | BazaS2 | run=e09539d57a | user=- | role=- | UNHANDLED EXCEPTION (sys.excepthook)
+Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 780, in eventFilter
+    def eventFilter(self, obj, ev):  # type: ignore[override]
+    
+KeyboardInterrupt
+2026-02-22 22:21:50 | ERROR | BazaS2 | run=f621ed2ecc | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at

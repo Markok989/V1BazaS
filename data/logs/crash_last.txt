@@ -1,6 +1,6 @@
-[2026-02-21 13:40:51] UNHANDLED EXCEPTION (sys.excepthook)
+[2026-02-22 22:21:33] UNHANDLED EXCEPTION (sys.excepthook)
 APP=BazaS2 v=0.2-v1
-PID=20944 THREAD=MainThread
+PID=54144 THREAD=MainThread
 DB_FILE=D:\DEV\AppToc\V1Baza\data\db\bazas2.sqlite
 
 EXCEPTION:

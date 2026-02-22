@@ -11,34 +11,43 @@ Senior hardening / best practices:
 - active_role mora biti među dodeljenim rolama (sprečava eskalaciju).
 - Ako user već ima 'roles' listu, polje 'role' ne sme da eskalira prava van te liste.
 - FAIL-SAFE: BASIC_USER i READONLY nikad users.*; wildcard '*' ignorisan za te role čak i ako “procure”.
+- Kompatibilnost: dodati helper-i can/can_any/can_all (UI fallback koristi core.rbac.can).
 
 Napomena:
 - RBAC ne rešava “cross-sector leak” sam po sebi. To rešava scope + servisni WHERE filter.
-  (Ali RBAC mora biti stabilan i ne sme da eskalira rolu na ADMIN slučajno.)
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-# ---- Permissions ----
-PERM_ASSETS_VIEW = "assets.view"
+# ---------------------------------------------------------------------------
+# Permissions (string konstante)
+# ---------------------------------------------------------------------------
+
+# assets
+PERM_ASSETS_VIEW = "assets.view"                   # FULL list
 PERM_ASSETS_CREATE = "assets.create"
 PERM_ASSETS_EDIT = "assets.edit"
 PERM_ASSETS_DELETE = "assets.delete"
-PERM_ASSETS_METRO_VIEW = "assets.metrology.view"
-PERM_ASSETS_MY_VIEW = "assets.my.view"
+PERM_ASSETS_METRO_VIEW = "assets.metrology.view"   # metrology scope list
+PERM_ASSETS_MY_VIEW = "assets.my.view"             # MY assets list (duženja)
 
+# assignments
 PERM_ASSIGN_VIEW = "assignments.view"
 PERM_ASSIGN_CREATE = "assignments.create"
 PERM_ASSIGN_EDIT = "assignments.edit"
 PERM_ASSIGN_DELETE = "assignments.delete"
 
+# audit
 PERM_AUDIT_VIEW = "audit.view"
 
-PERM_METRO_VIEW = "metrology.view"
+# metrology
+PERM_METRO_VIEW = "metrology.view"                 # generic view (service-level scope handles MY/METRO)
+PERM_METRO_MY_VIEW = "metrology.my.view"           # explicit: MY metrology view (UI/service can prefer)
+PERM_METRO_SCOPE_VIEW = "metrology.scope.view"     # explicit: metrology-scope view (e.g. REFERENT_METRO)
 PERM_METRO_EDIT = "metrology.edit"
 PERM_METRO_MANAGE = "metrology.manage"
 
@@ -46,6 +55,7 @@ PERM_METRO_MANAGE = "metrology.manage"
 PERM_METRO_WRITE = PERM_METRO_EDIT
 PERM_METRO_ADMIN = PERM_METRO_MANAGE
 
+# users/settings/reports
 PERM_USERS_VIEW = "users.view"
 PERM_USERS_MANAGE = "users.manage"
 
@@ -54,7 +64,10 @@ PERM_SETTINGS_MANAGE = "settings.manage"
 
 PERM_REPORTS_PRINT = "reports.print"
 
-# ---- Roles ----
+# ---------------------------------------------------------------------------
+# Roles
+# ---------------------------------------------------------------------------
+
 ROLE_ADMIN = "ADMIN"
 ROLE_SECTOR_ADMIN = "SECTOR_ADMIN"
 ROLE_REFERENT_IT = "REFERENT_IT"
@@ -69,16 +82,19 @@ ROLE_ALIASES: Dict[str, str] = {
     "SUPERADMIN": ROLE_ADMIN,
     "GLOBAL_ADMIN": ROLE_ADMIN,
     "GLOBALADMIN": ROLE_ADMIN,
+
     # sector admin
     "SECTORADMIN": ROLE_SECTOR_ADMIN,
     "ADMIN_SEKTORA": ROLE_SECTOR_ADMIN,
     "SEKTOR_ADMIN": ROLE_SECTOR_ADMIN,
     "SEKTORADMIN": ROLE_SECTOR_ADMIN,
+
     # readonly
     "READ_ONLY": ROLE_READONLY,
     "RO": ROLE_READONLY,
     "VIEW_ONLY": ROLE_READONLY,
     "VIEWONLY": ROLE_READONLY,
+
     # basic
     "BASIC": ROLE_BASIC,
     "USER": ROLE_BASIC,
@@ -86,6 +102,7 @@ ROLE_ALIASES: Dict[str, str] = {
     "KORISNIK": ROLE_BASIC,
     "OBICAN": ROLE_BASIC,
     "OBICAN_KORISNIK": ROLE_BASIC,
+
     # referent metro
     "REFERENT_METROLOGIJE": ROLE_REFERENT_METRO,
     "METRO_REFERENT": ROLE_REFERENT_METRO,
@@ -93,32 +110,52 @@ ROLE_ALIASES: Dict[str, str] = {
     "REFERENT_METRO": ROLE_REFERENT_METRO,
 }
 
+# ---------------------------------------------------------------------------
+# Role permissions
+# NOTE:
+# - Service layer i dalje radi finalni scope filter (fail-closed).
+# - Ovdje samo definišemo "ko sme da pristupi feature-u".
+# ---------------------------------------------------------------------------
+
 ROLE_PERMS: Dict[str, Set[str]] = {
     ROLE_ADMIN: {"*"},
+
     ROLE_SECTOR_ADMIN: {
         PERM_ASSETS_VIEW,
         PERM_ASSETS_CREATE,
-        PERM_ASSETS_MY_VIEW,
         PERM_ASSETS_EDIT,
+
+        PERM_ASSETS_MY_VIEW,     # može i MY view
+
         PERM_ASSIGN_VIEW,
+        PERM_ASSIGN_CREATE,
+        PERM_ASSIGN_EDIT,
+
         PERM_AUDIT_VIEW,
+
+        # metrology (sector scope rešava servis)
         PERM_METRO_VIEW,
         PERM_METRO_EDIT,
+
         PERM_SETTINGS_VIEW,
         PERM_SETTINGS_MANAGE,
         PERM_USERS_VIEW,
         PERM_USERS_MANAGE,
+
         PERM_REPORTS_PRINT,
     },
+
+    # BASIC_USER: minimalno (BASIC UI: Moj Dashboard + Moja oprema)
+    # Namerno NEMA assets.view i NEMA audit.view (da ne “procure” globalni podaci).
     ROLE_BASIC: {
-        PERM_ASSETS_VIEW,
         PERM_ASSETS_MY_VIEW,
         PERM_ASSIGN_VIEW,
-        PERM_AUDIT_VIEW,
-        PERM_METRO_VIEW,
+        PERM_METRO_MY_VIEW,     # eksplicitno MY metrology
         PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
+
+    # READONLY: “čitam sve, ne menjam”
     ROLE_READONLY: {
         PERM_ASSETS_VIEW,
         PERM_ASSETS_MY_VIEW,
@@ -128,44 +165,66 @@ ROLE_PERMS: Dict[str, Set[str]] = {
         PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
+
     ROLE_REFERENT_IT: {
         PERM_ASSETS_VIEW,
         PERM_ASSETS_CREATE,
         PERM_ASSETS_EDIT,
+        PERM_ASSETS_MY_VIEW,
+
         PERM_ASSIGN_VIEW,
         PERM_ASSIGN_CREATE,
+
         PERM_AUDIT_VIEW,
+
+        # IT obično gleda metrologiju (bez edit)
         PERM_METRO_VIEW,
+
         PERM_USERS_VIEW,
         PERM_SETTINGS_VIEW,
-        PERM_ASSETS_MY_VIEW,
+
         PERM_REPORTS_PRINT,
     },
-    ROLE_REFERENT_METRO: {
-        PERM_ASSETS_METRO_VIEW,
-        PERM_ASSETS_MY_VIEW,
-        PERM_METRO_VIEW,
-        PERM_METRO_EDIT,
-        PERM_SETTINGS_VIEW,
-        PERM_REPORTS_PRINT,
-    },
+
     ROLE_REFERENT_OS: {
         PERM_ASSETS_VIEW,
         PERM_ASSETS_CREATE,
         PERM_ASSETS_EDIT,
+        PERM_ASSETS_MY_VIEW,
+
         PERM_ASSIGN_VIEW,
         PERM_ASSIGN_CREATE,
+
         PERM_AUDIT_VIEW,
         PERM_METRO_VIEW,
+
         PERM_USERS_VIEW,
         PERM_SETTINGS_VIEW,
+
+        PERM_REPORTS_PRINT,
+    },
+
+    # REFERENT_METRO: metrology scope + MY
+    ROLE_REFERENT_METRO: {
+        PERM_ASSETS_METRO_VIEW,
         PERM_ASSETS_MY_VIEW,
+
+        # metrology view je "feature access", scope filter radi servis
+        PERM_METRO_VIEW,
+        PERM_METRO_SCOPE_VIEW,
+        PERM_METRO_MY_VIEW,
+        PERM_METRO_EDIT,
+
+        PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
 }
 
-# ---- Role hierarchy (highest wins) ----
-# Veći broj = veća prava. Ako se pojavi nepoznata rola, tretira se kao READONLY.
+# ---------------------------------------------------------------------------
+# Role hierarchy (highest wins)
+# Veći broj = veća prava.
+# ---------------------------------------------------------------------------
+
 ROLE_PRIORITY: Dict[str, int] = {
     ROLE_ADMIN: 100,
     ROLE_SECTOR_ADMIN: 90,
@@ -176,7 +235,10 @@ ROLE_PRIORITY: Dict[str, int] = {
     ROLE_READONLY: 10,
 }
 
-# ---- Internals ----
+# ---------------------------------------------------------------------------
+# Internals / guards
+# ---------------------------------------------------------------------------
+
 _USERS_PERM_PREFIX = "users."
 _FAILSAFE_DENY_ROLES = {ROLE_BASIC, ROLE_READONLY}
 _SEPS = (",", ";", "|")
@@ -230,14 +292,29 @@ def _split_listish_or_string(v: Any) -> List[str]:
     Normalizuje roles polje:
     - list/tuple/set: flatten + split CSV/;/|
     - str: split CSV/;/|
+    - dict: uzmi name/role ako postoji
     - ostalo: str(v)
     """
     raw: List[str] = []
     if v is None:
         return raw
 
+    # dict/profil objekat
+    if isinstance(v, dict):
+        for kk in ("role", "name", "profile", "id"):
+            s = str(v.get(kk) or "").strip()
+            if s:
+                return _split_listish_or_string(s)
+        return []
+
     if isinstance(v, (list, tuple, set)):
         for x in v:
+            if x is None:
+                continue
+            # list može sadržati dict (profile objects)
+            if isinstance(x, dict):
+                raw.extend(_split_listish_or_string(x))
+                continue
             s = str(x or "").strip()
             if not s:
                 continue
@@ -280,6 +357,9 @@ def _role_key(role: Any) -> str:
     if isinstance(role, (list, tuple, set)):
         parts = _split_listish_or_string(role)
         return str(parts[0] if parts else "")
+    if isinstance(role, dict):
+        parts = _split_listish_or_string(role)
+        return str(parts[0] if parts else "")
     return str(role)
 
 
@@ -301,9 +381,7 @@ def _normalize_role_cached(role_key: str) -> str:
 
 
 def normalize_role(role: Any) -> str:
-    """
-    Public normalize_role() koji je bezbedan za cache (radi i za unhashable input).
-    """
+    """Public normalize_role() bezbedan za cache (radi i za unhashable input)."""
     return _normalize_role_cached(_role_key(role))
 
 
@@ -454,7 +532,10 @@ def clear_rbac_caches(reapply_guards: bool = True) -> None:
         _apply_security_guards_to_role_perms()
 
 
-# ---- Public API ----
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 def user_has_perm(user: Any, perm: str) -> bool:
     p = (perm or "").strip()
     if not p:
@@ -480,6 +561,7 @@ def user_has_perm(user: Any, perm: str) -> bool:
                 return True
         except Exception:
             continue
+
     return False
 
 
@@ -511,6 +593,48 @@ def effective_perms(user: Any) -> Set[str]:
     return _perms_for_role(_role_from_user(user))
 
 
+# ---------------------------------------------------------------------------
+# Compatibility helpers: core.rbac.can (UI fallback)
+# ---------------------------------------------------------------------------
+
+def can(perm: str, user: Any = None) -> bool:
+    """
+    Kompatibilni helper:
+    - Ako user nije prosleđen, pokuša da uzme core.session.get_current_user()
+    - Ako session nije dostupna, vraća False (fail-closed)
+    """
+    u = user
+    if u is None:
+        try:
+            from core.session import get_current_user  # type: ignore
+            u = get_current_user()
+        except Exception:
+            u = None
+    return user_has_perm(u, perm)
+
+
+def can_any(perms: Iterable[str], user: Any = None) -> bool:
+    u = user
+    if u is None:
+        try:
+            from core.session import get_current_user  # type: ignore
+            u = get_current_user()
+        except Exception:
+            u = None
+    return user_has_any_perm(u, perms)
+
+
+def can_all(perms: Iterable[str], user: Any = None) -> bool:
+    u = user
+    if u is None:
+        try:
+            from core.session import get_current_user  # type: ignore
+            u = get_current_user()
+        except Exception:
+            u = None
+    return user_has_all_perms(u, perms)
+
+
 def validate_rbac_config() -> List[str]:
     warns: List[str] = []
 
@@ -526,7 +650,7 @@ def validate_rbac_config() -> List[str]:
             if _is_users_perm(str(p)):
                 warns.append(f"{role} ima users.* permisiju ({p}) (ne bi smelo).")
 
-    # general sanity checks
+    # sanity checks
     for role, rp in ROLE_PERMS.items():
         for p in rp:
             if not str(p or "").strip():
@@ -536,7 +660,6 @@ def validate_rbac_config() -> List[str]:
         if tgt not in ROLE_PERMS:
             warns.append(f"ROLE_ALIASES: '{src}' mapira na nepoznatu rolu '{tgt}'.")
 
-    # hierarchy sanity
     for role in ROLE_PERMS.keys():
         if role not in ROLE_PRIORITY:
             warns.append(f"ROLE_PRIORITY: nema prioritet za rolu '{role}' (fallback=READONLY score).")
@@ -545,6 +668,7 @@ def validate_rbac_config() -> List[str]:
 
 
 __all__ = [
+    # perms
     "PERM_ASSETS_VIEW",
     "PERM_ASSETS_CREATE",
     "PERM_ASSETS_EDIT",
@@ -557,6 +681,8 @@ __all__ = [
     "PERM_ASSIGN_DELETE",
     "PERM_AUDIT_VIEW",
     "PERM_METRO_VIEW",
+    "PERM_METRO_MY_VIEW",
+    "PERM_METRO_SCOPE_VIEW",
     "PERM_METRO_EDIT",
     "PERM_METRO_MANAGE",
     "PERM_METRO_WRITE",
@@ -566,9 +692,19 @@ __all__ = [
     "PERM_SETTINGS_VIEW",
     "PERM_SETTINGS_MANAGE",
     "PERM_REPORTS_PRINT",
+    # roles
+    "ROLE_ADMIN",
+    "ROLE_SECTOR_ADMIN",
+    "ROLE_REFERENT_IT",
+    "ROLE_REFERENT_METRO",
+    "ROLE_REFERENT_OS",
+    "ROLE_BASIC",
+    "ROLE_READONLY",
+    # config
     "ROLE_ALIASES",
     "ROLE_PERMS",
     "ROLE_PRIORITY",
+    # api
     "normalize_role",
     "pick_highest_role",
     "user_has_perm",
@@ -581,7 +717,12 @@ __all__ = [
     "list_assigned_roles",
     "validate_rbac_config",
     "clear_rbac_caches",
+    # compat helpers
+    "can",
+    "can_any",
+    "can_all",
 ]
+
 
 if __name__ == "__main__":  # pragma: no cover
     # Minimalni self-test: možeš pokrenuti `python core/rbac.py`
@@ -590,6 +731,7 @@ if __name__ == "__main__":  # pragma: no cover
 
     # multi-role sa active_role validnim
     u_multi = {"roles": ["REFERENT_IT", "REFERENT_METRO"], "active_role": "REFERENT_METRO"}
+
     assert user_has_perm(u_admin, "anything.goes") is True
     assert user_has_perm(u_basic, PERM_USERS_VIEW) is False
     assert effective_role(u_multi) == "REFERENT_METRO"

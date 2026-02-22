@@ -655,8 +655,8 @@
   "assets_table_v10": {
     "order": [
       "rownum",
-      "toc_number",
       "asset_uid",
+      "toc_number",
       "nomenclature_no",
       "serial_number",
       "name",
