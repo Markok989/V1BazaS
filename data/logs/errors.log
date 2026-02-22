@@ -1130,3 +1130,6 @@ Traceback (most recent call last):
     def eventFilter(self, obj, ev):  # type: ignore[override]
     
 KeyboardInterrupt
+2026-02-22 20:13:10 | ERROR | BazaS2 | run=f78d8a747b | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 20:46:49 | ERROR | BazaS2 | run=5fdec6b786 | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-22 21:26:16 | ERROR | BazaS2 | run=4be4b294fc | user=- | role=- | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
