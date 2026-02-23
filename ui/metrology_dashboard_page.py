@@ -1,29 +1,29 @@
 # FILENAME: ui/metrology_dashboard_page.py
-# (FILENAME: ui/metrology_dashboard_page.py - START PART 1/3)
+# (FILENAME: ui/metrology_dashboard_page.py - START PART 1/6)
 # -*- coding: utf-8 -*-
 """
 BazaS2 (offline) — ui/metrology_dashboard_page.py
 
-⚠️ VAŽNO (hardening bez menjanja izgleda):
-- Dashboard je ranije čitao "sve iz baze" i RBAC je bio samo metrology.view -> to je curenje podataka.
-- Sada se scope primenjuje u SQL (ALL/SECTOR/MY) u skladu sa session-om i rolama:
-  ADMIN -> ALL
-  SECTOR_ADMIN + REFERENT_* -> SECTOR (ako je moguće), inače MY (fail-closed)
-  ostali -> MY (fail-closed)
-- Fallback konekcija više NE ide na hardcoded data/db/bazas2.sqlite (sprečava “dve baze” problem),
-  već koristi core.db (connect_db/db_conn) ili core.config.DB_FILE.
+Hardening (bez menjanja izgleda i postojećih funkcija):
+- ✅ Scope filtriranje na SQL nivou (ALL/SECTOR/MY) — sprečava curenje.
+- ✅ Metrologija prikazuje SAMO sredstva koja imaju metrology flag (assets.is_metrology=1).
+  * Ako kolona ne postoji u legacy bazi: fallback je "samo ona koja imaju metrology record" (bez curenja).
+- ✅ Status "NEPOZNATO" ako nije unet datum etaloniranja (calib_date je prazno),
+  čak i ako valid_until postoji (po zahtevu).
+- ✅ DB konekcija: više ne koristimo `with connect_db() as conn` (to ne zatvara konekciju),
+  nego db_conn() (ako postoji) ili ručno zatvaranje (fail-safe).
 - Izgled (QSS), kolone, filteri, chip bar, status tint, sort, context menu: ostaje isto.
 """
 
 from __future__ import annotations
 
 import logging
-import sqlite3
 import re
+import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QRect  # type: ignore
 from PySide6.QtGui import QColor, QBrush, QPainter  # type: ignore
@@ -50,6 +50,8 @@ from PySide6.QtWidgets import (  # type: ignore
     QStyleOptionViewItem,
 )
 
+log = logging.getLogger(__name__)
+
 # -------------------- SR date/time display (FAIL-SAFE for this page) --------------------
 try:
     from ui.utils.datetime_fmt import fmt_dt_sr as _base_fmt_dt_sr, fmt_date_sr as _base_fmt_date_sr  # type: ignore
@@ -62,6 +64,16 @@ _RE_SR_DT_ANY = re.compile(r"^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\.?\s+(\d{1,2}):(\
 
 _RE_ISO_DATE_ANY = re.compile(r"^\s*(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})\s*$")
 _RE_ISO_DT_ANY = re.compile(r"^\s*(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?.*$")
+
+# ident hardening (defanzivno — kolone dolaze iz PRAGMA, ali bolje je da ne rizikujemo)
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _is_safe_ident(name: str) -> bool:
+    try:
+        return bool(name) and bool(_IDENT_RE.match(str(name)))
+    except Exception:
+        return False
 
 
 def _is_sentinel_date_iso(s: str) -> bool:
@@ -207,6 +219,7 @@ def _truncate_middle(s: str, left: int = 12, right: int = 6) -> str:
         return ss
     return f"{ss[:left]}…{ss[-right:]}"
 
+
 # -------------------- table copy utils (best-effort) --------------------
 try:
     from ui.utils.table_copy import (  # type: ignore
@@ -220,6 +233,7 @@ except Exception:  # pragma: no cover
 
     def copy_selected_cells(tbl: QTableWidget) -> None:
         return
+
 
 # -------------------- RBAC helpers (UI-level, fail-closed) --------------------
 try:
@@ -245,7 +259,6 @@ def _get_current_user_dict() -> Dict[str, Any]:
 
 
 def _active_role_safe() -> str:
-    # koristi active_role ako postoji, pa fallback na user dict
     try:
         from core.session import active_role  # type: ignore
         r = str(active_role() or "").strip().upper()
@@ -279,7 +292,7 @@ def _effective_scope_from_session() -> str:
 
 def _actor_name_safe() -> str:
     """
-    BITNO: ne vraćamo placeholder "user" za identitet (da ne match-uje tuđe).
+    BITNO: ne vraćamo placeholder "user" za identitet.
     Ako ne znamo ko si -> "" (fail-closed za MY filter).
     """
     try:
@@ -333,18 +346,41 @@ def _identity_candidates() -> List[str]:
     return out
 
 
-def _holder_matches_me(holder_value: Any) -> bool:
+_TOKEN_SPLIT_RE = re.compile(r"[^0-9a-zA-Z\u0106\u0107\u010c\u010d\u0160\u0161\u017d\u017e\u0110\u0111]+")
+
+
+def _tokens(s: str) -> List[str]:
+    ss = _norm(s)
+    if not ss:
+        return []
+    return [t for t in _TOKEN_SPLIT_RE.split(ss) if t]
+
+
+def _holder_matches_me(holder_value: Any, *, cands: Optional[List[str]] = None) -> bool:
+    """
+    Client-side filter ("Samo moja sredstva"):
+    - prvo exact match (casefold)
+    - zatim token match (kandidat >=4 znaka) da izbegnemo lažna poklapanja
+    """
     h = _norm(holder_value)
     if not h:
         return False
-    cands = _identity_candidates()
-    if not cands:
+    ccands = cands if cands is not None else _identity_candidates()
+    if not ccands:
         return False
-    for c in cands:
+
+    for c in ccands:
         if h == c:
             return True
-    for c in cands:
-        if c and (c in h or h in c):
+
+    ht = set(_tokens(h))
+    if not ht:
+        return False
+
+    for c in ccands:
+        if len(c) < 4:
+            continue
+        if c in ht:
             return True
     return False
 
@@ -377,36 +413,40 @@ def _wire_table_copy(table: QTableWidget) -> None:
     except Exception:
         pass
 
-# (FILENAME: ui/metrology_dashboard_page.py - END PART 1/3)
 
-# FILENAME: ui/metrology_dashboard_page.py
-# (FILENAME: ui/metrology_dashboard_page.py - START PART 2/3)
 # -------------------- DB helpers --------------------
 def _db_path_fallback() -> str:
-    # Jedno mesto za DB path fallback (sprečava “dve baze”)
+    """
+    Jedno mesto za DB path (sprečava “dve baze”).
+    Preferiraj core.db.get_db_path (resolve), pa core.config.DB_FILE.
+    """
+    try:
+        from core.db import get_db_path  # type: ignore
+        p = str(get_db_path() or "").strip()
+        if p:
+            return p
+    except Exception:
+        pass
     try:
         from core.config import DB_FILE  # type: ignore
         return str(DB_FILE)
     except Exception:
         return "data/db/bazas2.sqlite"
 
+# (FILENAME: ui/metrology_dashboard_page.py - END PART 1/6)
+
+# FILENAME: ui/metrology_dashboard_page.py
+# (FILENAME: ui/metrology_dashboard_page.py - START PART 2/6)
 
 @contextmanager
 def _connect_db():
-    # 1) Prefer core.db.connect_db() (isti pattern kao u servisima)
-    try:
-        from core.db import connect_db  # type: ignore
-        with connect_db() as conn:
-            try:
-                conn.row_factory = sqlite3.Row
-            except Exception:
-                pass
-            yield conn
-            return
-    except Exception:
-        pass
-
-    # 2) Fallback core.db.db_conn() ako postoji
+    """
+    UVEK zatvara konekciju:
+    - prefer core.db.db_conn() (siguran CM)
+    - fallback: core.db.connect_db() + manual close (NE koristimo ga kao CM)
+    - last resort: sqlite3.connect(DB_FILE)
+    """
+    # 1) Prefer db_conn (zatvara konekciju)
     try:
         from core.db import db_conn  # type: ignore
         with db_conn() as conn:
@@ -415,31 +455,52 @@ def _connect_db():
             except Exception:
                 pass
             yield conn
-            return
+        return
     except Exception:
         pass
 
-    # 3) Last resort sqlite3 direct (ali sa DB_FILE)
-    conn = sqlite3.connect(_db_path_fallback())
+    # 2) connect_db exists but is NOT a closing CM -> close manually
     try:
-        conn.row_factory = sqlite3.Row
+        from core.db import connect_db  # type: ignore
+        conn = connect_db()
+        try:
+            try:
+                conn.row_factory = sqlite3.Row
+            except Exception:
+                pass
+            yield conn
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return
+    except Exception:
+        pass
+
+    # 3) Last resort sqlite3 direct
+    conn2 = sqlite3.connect(_db_path_fallback(), timeout=5.0)
+    try:
+        conn2.row_factory = sqlite3.Row
     except Exception:
         pass
     try:
         try:
-            conn.execute("PRAGMA busy_timeout=2500;")
-            conn.execute("PRAGMA foreign_keys=ON;")
+            conn2.execute("PRAGMA busy_timeout=2500;")
+            conn2.execute("PRAGMA foreign_keys=ON;")
         except Exception:
             pass
-        yield conn
+        yield conn2
     finally:
         try:
-            conn.close()
+            conn2.close()
         except Exception:
             pass
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    if not name:
+        return False
     try:
         r = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1;",
@@ -451,6 +512,9 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
 
 
 def _cols(conn: sqlite3.Connection, table: str) -> List[str]:
+    # table name mora biti safe ident (PRAGMA ne prima parametar)
+    if not _is_safe_ident(table):
+        return []
     try:
         rows = conn.execute(f"PRAGMA table_info({table});").fetchall()
         out: List[str] = []
@@ -458,7 +522,10 @@ def _cols(conn: sqlite3.Connection, table: str) -> List[str]:
             try:
                 out.append(str(r["name"]))
             except Exception:
-                out.append(str(r[1]))
+                try:
+                    out.append(str(r[1]))
+                except Exception:
+                    pass
         return out
     except Exception:
         return []
@@ -496,17 +563,16 @@ def _resolve_scope_for_dashboard(conn: sqlite3.Connection, *, col_sector: str, c
     if role == "ADMIN":
         return "ALL" if sc == "ALL" else sc
 
-    # sector feasibility
+    # micro-opt: candidates računamo jednom
+    cands = _identity_candidates()
     sector_ok = bool(col_sector) and bool(_current_sector_safe())
-    my_ok = bool(col_holder) and bool(_identity_candidates())
+    my_ok = bool(col_holder) and bool(cands)
 
-    # sector roles prefer sector
     if _role_is_sector_pref(role):
         if sector_ok:
             return "SECTOR"
         return "MY" if my_ok else "MY"
 
-    # non-sector roles: follow session, with safe fallback
     if sc == "SECTOR":
         return "SECTOR" if sector_ok else ("MY" if my_ok else "MY")
     if sc == "MY":
@@ -527,6 +593,12 @@ def _scope_where_and_params(
     """
     sc = (scope or "").strip().upper()
 
+    # hardening: kolone idu u f-string
+    if sc == "SECTOR" and col_sector and (not _is_safe_ident(col_sector)):
+        return " AND 0=1", []
+    if sc == "MY" and col_holder and (not _is_safe_ident(col_holder)):
+        return " AND 0=1", []
+
     if sc == "ALL":
         return "", []
 
@@ -540,7 +612,8 @@ def _scope_where_and_params(
     cands = _identity_candidates()
     if not (col_holder and cands):
         return " AND 0=1", []
-    ors = []
+
+    ors: List[str] = []
     params: List[Any] = []
     for c in cands:
         ors.append(f"LOWER(TRIM(COALESCE(a.{col_holder},''))) = ?")
@@ -548,12 +621,20 @@ def _scope_where_and_params(
     return " AND (" + " OR ".join(ors) + ")", params
 
 
-def _met_status(valid_until_iso: str, warn_days: int) -> str:
+def _met_status(calib_date_iso: str, valid_until_iso: str, warn_days: int) -> str:
+    """
+    NOVO (po zahtevu):
+    - ako calib_date nije unet -> NEPOZNATO
+    - inače status po valid_until
+    """
+    cd = (calib_date_iso or "").strip()
+    if not cd:
+        return "NEPOZNATO"
+
     vu = (valid_until_iso or "").strip()
-    if not vu:
+    if not vu or _is_sentinel_date_iso(vu):
         return "NEPOZNATO"
-    if _is_sentinel_date_iso(vu):
-        return "NEPOZNATO"
+
     try:
         y, m, d = [int(x) for x in vu.split("-")]
         vu_date = date(y, m, d)
@@ -568,6 +649,8 @@ def _met_status(valid_until_iso: str, warn_days: int) -> str:
         wd = int(warn_days)
     except Exception:
         wd = 30
+    if wd < 0:
+        wd = 0
 
     if (vu_date - today).days <= wd:
         return "ISTIČE"
@@ -585,14 +668,18 @@ class MetroDashRow:
     location: str
     last_assigned_at: str
     met_uid: str
+    calib_date: str  # ✅ treba za status recalculation kad warn_days promeniš
     valid_until: str
     status: str
 
 
 def _fetch_dashboard_rows(warn_days: int = 30) -> List[MetroDashRow]:
     """
-    VAŽNO: izgled i funkcije ostaju, ali sad je SQL scope-aware (sprečava curenje).
-    I dalje prikazujemo i sredstva bez metrologije (NEPOZNATO), ali samo u dozvoljenom scope-u.
+    VAŽNO:
+    - SQL scope-aware (sprečava curenje)
+    - prikazuje samo assets sa metrology flag (is_metrology=1) ako postoji kolona,
+      inače fallback: samo assets koji imaju bar jedan metrology record (bez curenja).
+    - status = NEPOZNATO ako calib_date nije unet.
     """
     with _connect_db() as conn:
         if not _table_exists(conn, "assets") or not _table_exists(conn, "metrology_records"):
@@ -610,36 +697,57 @@ def _fetch_dashboard_rows(warn_days: int = 30) -> List[MetroDashRow]:
         col_loc = _pick_col(a_cols, ("location", "lokacija", "loc"))
         col_assigned_at = _pick_col(a_cols, ("last_assigned_at", "assigned_at", "zaduzeno_od", "assigned_time"))
         col_updated = _pick_col(a_cols, ("updated_at", "modified_at", "updated", "last_update"))
-        col_status = _pick_col(a_cols, ("status", "asset_status", "state"))
+        col_asset_status = _pick_col(a_cols, ("status", "asset_status", "state"))
+
+        # ✅ metrology flag kolona (ako postoji)
+        col_is_metro = _pick_col(a_cols, ("is_metrology", "is_metro", "metrology_flag", "metro_flag"))
 
         col_m_asset = _pick_col(m_cols, ("asset_uid",))
         col_m_uid = _pick_col(m_cols, ("met_uid", "uid"))
         col_m_valid = _pick_col(m_cols, ("valid_until",))
+        col_m_calib = _pick_col(m_cols, ("calib_date", "calibration_date", "etalon_date"))
         col_m_updated = _pick_col(m_cols, ("updated_at", "modified_at", "updated"))
+
+        # hardening: identi moraju biti safe pre f-string
+        for nm in (col_rb, col_uid, col_name, col_cat, col_holder, col_sector, col_loc, col_assigned_at, col_updated, col_asset_status,
+                   col_is_metro, col_m_asset, col_m_uid, col_m_valid, col_m_calib, col_m_updated):
+            if nm and (not _is_safe_ident(nm)):
+                # ako je schema “čudna”, fail-closed
+                return []
 
         if not col_uid or not col_m_asset or not col_m_uid or not col_m_valid:
             return []
 
         last_time_col = col_assigned_at if col_assigned_at else col_updated
+        if last_time_col and (not _is_safe_ident(last_time_col)):
+            last_time_col = col_updated if (col_updated and _is_safe_ident(col_updated)) else ""
 
-        # SQL-level exclude retired/scrapped assets (postojeća funkcija, bez promene)
+        # exclude retired/scrapped assets (postojeće ponašanje)
         where_retired = ""
-        if col_status:
+        if col_asset_status:
             where_retired = f"""
               AND NOT (
-                LOWER(COALESCE(a.{col_status},'')) LIKE '%rashod%'
-                OR LOWER(COALESCE(a.{col_status},'')) LIKE '%otpis%'
-                OR LOWER(COALESCE(a.{col_status},'')) IN ('retired','disposed','decommissioned','inactive','archived')
+                LOWER(COALESCE(a.{col_asset_status},'')) LIKE '%rashod%'
+                OR LOWER(COALESCE(a.{col_asset_status},'')) LIKE '%otpis%'
+                OR LOWER(COALESCE(a.{col_asset_status},'')) IN ('retired','disposed','decommissioned','inactive','archived')
               )
             """
 
-        # ✅ NEW: scope predicate (ALL/SECTOR/MY)
+        # scope predicate
         scope = _resolve_scope_for_dashboard(conn, col_sector=col_sector, col_holder=col_holder)
-        where_scope, params_scope = _scope_where_and_params(
-            conn, scope=scope, col_sector=col_sector, col_holder=col_holder
-        )
+        where_scope, params_scope = _scope_where_and_params(conn, scope=scope, col_sector=col_sector, col_holder=col_holder)
 
         sel_rb = f"COALESCE(a.{col_rb}, NULL) AS rb," if col_rb else "NULL AS rb,"
+
+        # ✅ metrology-only filter:
+        # - ako postoji flag kolona -> enforce flag=1
+        # - ako ne postoji -> fallback: samo assets koji imaju metrology record (l.met_uid nije prazan)
+        where_metro_only = ""
+        if col_is_metro:
+            where_metro_only = f" AND COALESCE(a.{col_is_metro},0)=1"
+
+        # CTE: latest metrology record po max valid_until, pa tie-breaker po updated_at
+        select_calib = f", COALESCE(mr.{col_m_calib}, '') AS calib_date" if col_m_calib else ", '' AS calib_date"
 
         sql = f"""
         WITH latest_valid AS (
@@ -657,6 +765,7 @@ def _fetch_dashboard_rows(warn_days: int = 30) -> List[MetroDashRow]:
                 mr.{col_m_uid} AS met_uid,
                 mr.{col_m_valid} AS valid_until,
                 COALESCE(mr.{col_m_updated}, '') AS updated_at
+                {select_calib}
             FROM metrology_records mr
             JOIN latest_valid lv
               ON lv.asset_uid = mr.{col_m_asset}
@@ -683,6 +792,7 @@ def _fetch_dashboard_rows(warn_days: int = 30) -> List[MetroDashRow]:
             COALESCE(a.{col_loc}, '') AS location,
             COALESCE(a.{last_time_col}, '') AS last_assigned_at,
             COALESCE(l.met_uid, '') AS met_uid,
+            COALESCE(l.calib_date, '') AS calib_date,
             COALESCE(l.valid_until, '') AS valid_until
         FROM assets a
         LEFT JOIN latest_one l
@@ -690,18 +800,29 @@ def _fetch_dashboard_rows(warn_days: int = 30) -> List[MetroDashRow]:
         WHERE 1=1
         {where_retired}
         {where_scope}
+        {where_metro_only}
         ;
         """
 
         try:
             rows = conn.execute(sql, tuple(params_scope)).fetchall()
-        except Exception:
+        except Exception as e:
+            try:
+                log.exception("Metrology dashboard SQL failed: %s", e)
+            except Exception:
+                pass
             return []
 
         out: List[MetroDashRow] = []
         for r in rows:
             asset_uid = str(r["asset_uid"] or "").strip()
             if not asset_uid:
+                continue
+
+            met_uid = str(r["met_uid"] or "").strip()
+
+            # ✅ fallback ako nema flag kolone: samo ona koja imaju metrology record (bez curenja)
+            if not col_is_metro and (not met_uid):
                 continue
 
             rb_val: Optional[int] = None
@@ -718,10 +839,10 @@ def _fetch_dashboard_rows(warn_days: int = 30) -> List[MetroDashRow]:
             sector = str(r["sector"] or "").strip()
             location = str(r["location"] or "").strip()
             last_assigned_at = str(r["last_assigned_at"] or "").strip()
-            met_uid = str(r["met_uid"] or "").strip()
+            calib_date = str(r["calib_date"] or "").strip()
             valid_until = str(r["valid_until"] or "").strip()
 
-            st = _met_status(valid_until, warn_days)
+            st = _met_status(calib_date, valid_until, warn_days)
 
             out.append(
                 MetroDashRow(
@@ -734,6 +855,7 @@ def _fetch_dashboard_rows(warn_days: int = 30) -> List[MetroDashRow]:
                     location=location,
                     last_assigned_at=last_assigned_at,
                     met_uid=met_uid,
+                    calib_date=calib_date,
                     valid_until=valid_until,
                     status=st,
                 )
@@ -760,10 +882,14 @@ def _kpi_counts(rows: List[MetroDashRow]) -> Dict[str, int]:
             c["NEPOZNATO"] += 1
     return c
 
-# (FILENAME: ui/metrology_dashboard_page.py - END PART 2/3)
+# (FILENAME: ui/metrology_dashboard_page.py - END PART 2/6)
 
 # FILENAME: ui/metrology_dashboard_page.py
-# (FILENAME: ui/metrology_dashboard_page.py - START PART 3/3)
+# (FILENAME: ui/metrology_dashboard_page.py - START PART 3/6)
+
+# Module logger (koristi se u DB delu; OK je i ako je definisan posle funkcija – global lookup je runtime)
+log = logging.getLogger(__name__)
+
 # -------------------- THEME (PRO DARK) --------------------
 DASH_QSS = """
 QWidget#MetroDashRoot { background: #12141a; color: #e7e9f1; font-size: 12px; }
@@ -1035,6 +1161,7 @@ class _RowStatusTintDelegate(QStyledItemDelegate):
         if not is_selected:
             painter.fillRect(option.rect, tint)
 
+        # leva akcent traka (na prvoj koloni)
         if col == 0:
             r = QRect(option.rect)
             stripe = QRect(r.left(), r.top(), self._accent_px, r.height())
@@ -1070,6 +1197,26 @@ class _Chip(QFrame):
         """)
 
 
+@contextmanager
+def _block_signals(*widgets: Any):
+    """
+    Stabilno blokiranje signala (da ne ostane zaglavljeno ako se desi exception).
+    """
+    try:
+        for w in widgets:
+            try:
+                w.blockSignals(True)
+            except Exception:
+                pass
+        yield
+    finally:
+        for w in widgets:
+            try:
+                w.blockSignals(False)
+            except Exception:
+                pass
+
+
 class MetrologyDashboardPage(QWidget):
     COLS = [
         "#",
@@ -1097,7 +1244,6 @@ class MetrologyDashboardPage(QWidget):
 
         self.logger = logger
         self._rows: List[MetroDashRow] = []
-        self._default_visual_order = list(range(len(self.COLS)))
         self._force_default_sort: bool = False
 
         top = QHBoxLayout()
@@ -1124,6 +1270,7 @@ class MetrologyDashboardPage(QWidget):
         top.addWidget(self.lbl_warn)
         top.addWidget(self.cb_warn)
 
+        # ✅ dugme za osvežavanje ostaje
         self.btn_refresh = QPushButton("Osveži")
         self.btn_refresh.setObjectName("primary")
         self.btn_refresh.setFixedWidth(120)
@@ -1212,7 +1359,6 @@ class MetrologyDashboardPage(QWidget):
         self.lb_chips_title = QLabel("Aktivni filteri:")
         self.lb_chips_title.setStyleSheet("color:#aab2c5; font-weight:900;")
         self.chip_lay.addWidget(self.lb_chips_title)
-
         self.chip_lay.addStretch(1)
         self.chip_wrap.setVisible(False)
 
@@ -1222,7 +1368,7 @@ class MetrologyDashboardPage(QWidget):
 
         self.tbl = QTableWidget(0, len(self.COLS))
         self.tbl.setHorizontalHeaderLabels(self.COLS)
-        self.tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)  # ✅ preciznije od QTableWidget.NoEditTriggers
+        self.tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tbl.setAlternatingRowColors(True)
         self.tbl.setShowGrid(True)
         self.tbl.setGridStyle(Qt.SolidLine)
@@ -1286,6 +1432,7 @@ class MetrologyDashboardPage(QWidget):
         main.addWidget(self.lb_rbac)
         main.addWidget(self.tbl, 1)
 
+        # wiring
         self.btn_refresh.clicked.connect(self.refresh)
         self.ed_search.textChanged.connect(self._apply_filter)
         self.ed_search.returnPressed.connect(self._focus_first_row)
@@ -1304,6 +1451,11 @@ class MetrologyDashboardPage(QWidget):
 
         self._apply_rbac()
         self.refresh()
+
+# (FILENAME: ui/metrology_dashboard_page.py - END PART 3/6)
+
+# FILENAME: ui/metrology_dashboard_page.py
+# (FILENAME: ui/metrology_dashboard_page.py - START PART 4/6)
 
     # -------------------- UI builders --------------------
     def _mk_status_btn(self, text: str, color_hex: str) -> QToolButton:
@@ -1324,14 +1476,12 @@ class MetrologyDashboardPage(QWidget):
         return b
 
     def _reset_columns_default(self) -> None:
-        """
-        FIX: stabilniji restore ordera (bez vizuelne promene, samo tačnost).
-        """
+        """Stabilniji restore ordera (bez vizuelne promene, samo tačnost)."""
         try:
             hdr = self.tbl.horizontalHeader()
-            # cilj: vizuelni indeks i treba da bude 0..n-1 za logičke sekcije
+            # cilj: vizuelni indeks = logički indeks (default mapping)
             for target_visual in range(hdr.count()):
-                logical = target_visual  # default mapping (kao inicijalni)
+                logical = target_visual
                 cur_visual = hdr.visualIndex(logical)
                 if cur_visual != target_visual:
                     hdr.moveSection(cur_visual, target_visual)
@@ -1339,17 +1489,11 @@ class MetrologyDashboardPage(QWidget):
             pass
 
     def _reset_filters_default(self) -> None:
-        """
-        Reset filtera: vrati UI kontrole na default tako da se opet vidi SVE.
-        """
-        widgets = [
+        """Reset filtera: vrati UI kontrole na default tako da se opet vidi SVE."""
+        with _block_signals(
             self.btn_st_overdue, self.btn_st_due, self.btn_st_ok, self.btn_st_unknown,
-            self.btn_focus, self.ck_my, self.cb_warn, self.ed_search,
-        ]
-        try:
-            for w in widgets:
-                w.blockSignals(True)
-
+            self.btn_focus, self.ck_my, self.cb_warn, self.ed_search
+        ):
             self.btn_focus.setChecked(False)
             self.btn_st_overdue.setChecked(True)
             self.btn_st_due.setChecked(True)
@@ -1359,13 +1503,6 @@ class MetrologyDashboardPage(QWidget):
             self.ck_my.setChecked(False)
             self.ed_search.setText("")
             self.cb_warn.setCurrentText("30")
-
-        finally:
-            for w in widgets:
-                try:
-                    w.blockSignals(False)
-                except Exception:
-                    pass
 
         self._force_default_sort = True
         self._apply_filter()
@@ -1377,6 +1514,7 @@ class MetrologyDashboardPage(QWidget):
             self.tbl, self.ed_search, self.cb_warn, self.ck_my, self.btn_refresh,
             self.btn_st_overdue, self.btn_st_due, self.btn_st_ok, self.btn_st_unknown, self.btn_focus,
             self.btn_cols_default, self.btn_filters_reset,
+            self.btn_open_asset, self.btn_open_met_list,
         ):
             try:
                 w.setEnabled(ok)
@@ -1384,7 +1522,10 @@ class MetrologyDashboardPage(QWidget):
                 pass
 
         if not ok:
-            self.tbl.setRowCount(0)
+            try:
+                self.tbl.setRowCount(0)
+            except Exception:
+                pass
             self.lb_rbac.setText("RBAC: nemaš pravo da vidiš metrologija dashboard (metrology.view).")
             self.lb_rbac.setVisible(True)
         else:
@@ -1413,8 +1554,11 @@ class MetrologyDashboardPage(QWidget):
 
     def _sync_buttons(self) -> None:
         has = self.tbl.currentRow() >= 0
-        self.btn_open_asset.setEnabled(has)
-        self.btn_open_met_list.setEnabled(has)
+        try:
+            self.btn_open_asset.setEnabled(has)
+            self.btn_open_met_list.setEnabled(has)
+        except Exception:
+            pass
 
     def _enabled_statuses(self) -> set:
         st = set()
@@ -1438,6 +1582,9 @@ class MetrologyDashboardPage(QWidget):
             pass
 
     def _apply_default_sort(self) -> None:
+        """
+        Default sort: status kolona (SortKeyItem ima stabilan status_sort ključ).
+        """
         try:
             self.tbl.sortItems(self.C_STATUS, Qt.AscendingOrder)
             self.tbl.horizontalHeader().setSortIndicator(self.C_STATUS, Qt.AscendingOrder)
@@ -1447,24 +1594,15 @@ class MetrologyDashboardPage(QWidget):
     # -------------------- toggles --------------------
     def _on_focus_toggle(self, checked: bool) -> None:
         if checked:
-            self.btn_st_overdue.blockSignals(True)
-            self.btn_st_due.blockSignals(True)
-            self.btn_st_ok.blockSignals(True)
-            self.btn_st_unknown.blockSignals(True)
-
-            self.btn_st_overdue.setChecked(True)
-            self.btn_st_due.setChecked(True)
-            self.btn_st_ok.setChecked(False)
-            self.btn_st_unknown.setChecked(False)
-
-            self.btn_st_overdue.blockSignals(False)
-            self.btn_st_due.blockSignals(False)
-            self.btn_st_ok.blockSignals(False)
-            self.btn_st_unknown.blockSignals(False)
-
+            with _block_signals(self.btn_st_overdue, self.btn_st_due, self.btn_st_ok, self.btn_st_unknown):
+                self.btn_st_overdue.setChecked(True)
+                self.btn_st_due.setChecked(True)
+                self.btn_st_ok.setChecked(False)
+                self.btn_st_unknown.setChecked(False)
         self._apply_filter()
 
     def _on_status_toggle(self, _checked: bool) -> None:
+        # ako fokus više nije “kritično only”, isključi fokus toggle
         if self.btn_focus.isChecked():
             crit = (
                 self.btn_st_overdue.isChecked()
@@ -1473,9 +1611,8 @@ class MetrologyDashboardPage(QWidget):
                 and (not self.btn_st_unknown.isChecked())
             )
             if not crit:
-                self.btn_focus.blockSignals(True)
-                self.btn_focus.setChecked(False)
-                self.btn_focus.blockSignals(False)
+                with _block_signals(self.btn_focus):
+                    self.btn_focus.setChecked(False)
         self._apply_filter()
 
     # -------------------- data load --------------------
@@ -1488,7 +1625,10 @@ class MetrologyDashboardPage(QWidget):
             self._rows = _fetch_dashboard_rows(warn_days=self._warn_days())
         except Exception as e:
             self._rows = []
-            QMessageBox.critical(self, "Greška", f"Ne mogu da učitam dashboard.\n\n{e}")
+            try:
+                QMessageBox.critical(self, "Greška", f"Ne mogu da učitam dashboard.\n\n{e}")
+            except Exception:
+                pass
             return
 
         c = _kpi_counts(self._rows)
@@ -1510,16 +1650,20 @@ class MetrologyDashboardPage(QWidget):
         only_my = bool(self.ck_my.isChecked())
         enabled_statuses = self._enabled_statuses()
 
+        # micro-opt: candidates računamo jednom
+        my_cands = _identity_candidates() if only_my else None
+
         rows: List[MetroDashRow] = []
         for r in (self._rows or []):
-            st = _met_status(r.valid_until, warn_days)
+            # status sada zavisi od calib_date + valid_until
+            st = _met_status(r.calib_date, r.valid_until, warn_days)
             rr = MetroDashRow(**{**r.__dict__, "status": st})
 
             st_key = (rr.status or "").strip().upper() or "NEPOZNATO"
             if st_key not in enabled_statuses:
                 continue
 
-            if only_my and not _holder_matches_me(rr.holder):
+            if only_my and not _holder_matches_me(rr.holder, cands=my_cands):
                 continue
 
             if q:
@@ -1537,18 +1681,32 @@ class MetrologyDashboardPage(QWidget):
         self._refresh_chips()
 
     def _clear_chip_row(self) -> None:
-        while self.chip_lay.count() > 2:
-            item = self.chip_lay.takeAt(1)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        # struktura: [title][chips...][stretch] -> brišemo samo chip widgete
+        try:
+            while self.chip_lay.count() > 2:
+                item = self.chip_lay.takeAt(1)
+                w = item.widget() if item is not None else None
+                if w is not None:
+                    w.deleteLater()
+        except Exception:
+            pass
 
     def _refresh_chips(self) -> None:
         self._clear_chip_row()
 
         chips: List[Tuple[str, Any]] = []
 
-        if not (self.btn_st_overdue.isChecked() and self.btn_st_due.isChecked() and self.btn_st_ok.isChecked() and self.btn_st_unknown.isChecked()):
+        try:
+            all_status = (
+                self.btn_st_overdue.isChecked()
+                and self.btn_st_due.isChecked()
+                and self.btn_st_ok.isChecked()
+                and self.btn_st_unknown.isChecked()
+            )
+        except Exception:
+            all_status = True
+
+        if not all_status:
             if self.btn_st_overdue.isChecked():
                 chips.append(("Isteklo", lambda: self.btn_st_overdue.setChecked(False)))
             if self.btn_st_due.isChecked():
@@ -1564,17 +1722,24 @@ class MetrologyDashboardPage(QWidget):
         if self.ck_my.isChecked():
             chips.append(("Samo moja", lambda: self.ck_my.setChecked(False)))
 
-        if (self.ed_search.text() or "").strip():
-            chips.append((f'Pretraga: "{(self.ed_search.text() or "").strip()}"', lambda: self.ed_search.setText("")))
+        s_txt = (self.ed_search.text() or "").strip()
+        if s_txt:
+            chips.append((f'Pretraga: "{s_txt}"', lambda: self.ed_search.setText("")))
 
         wd = self._warn_days()
         if wd != 30:
             chips.append((f"Alarm: {wd} dana", lambda: self.cb_warn.setCurrentText("30")))
 
         for text, fn in chips:
-            self.chip_lay.insertWidget(self.chip_lay.count() - 1, _Chip(text, fn, self.chip_wrap))
+            try:
+                self.chip_lay.insertWidget(self.chip_lay.count() - 1, _Chip(text, fn, self.chip_wrap))
+            except Exception:
+                pass
 
-        self.chip_wrap.setVisible(len(chips) > 0)
+        try:
+            self.chip_wrap.setVisible(len(chips) > 0)
+        except Exception:
+            pass
 
     # -------------------- rendering --------------------
     def _render(self, rows: List[MetroDashRow]) -> None:
@@ -1595,7 +1760,10 @@ class MetrologyDashboardPage(QWidget):
                 rb_sort: Any = 10**12
                 if rr.rb is not None:
                     rb_text = str(rr.rb)
-                    rb_sort = int(rr.rb)
+                    try:
+                        rb_sort = int(rr.rb)
+                    except Exception:
+                        rb_sort = rr.rb
 
                 st_key = (rr.status or "").strip().upper() or "NEPOZNATO"
                 rank = int(order_rank.get(st_key, 9))
@@ -1610,7 +1778,8 @@ class MetrologyDashboardPage(QWidget):
                 met_raw = (rr.met_uid or "").strip()
                 met_disp = _truncate_middle(met_raw, left=14, right=6)
 
-                status_sort = f"{rank}|{vu_sort}|{int(rb_sort):012d}|{rr.asset_uid}"
+                # status sort key stabilan (rank + valid_until + rb + uid)
+                status_sort = f"{rank}|{vu_sort}|{str(rb_sort).zfill(12)}|{rr.asset_uid}"
 
                 display_vals = [
                     rb_text,
@@ -1651,6 +1820,7 @@ class MetrologyDashboardPage(QWidget):
                     else:
                         item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
+                    # tooltips: raw vrednosti (precizno kopiranje)
                     if cc == self.C_VALID_UNTIL and vu_raw:
                         item.setToolTip(vu_raw)
                     elif cc == self.C_ASSIGNED and asg_raw:
@@ -1676,7 +1846,12 @@ class MetrologyDashboardPage(QWidget):
             self._force_default_sort = False
             self._apply_default_sort()
 
-    # -------------------- actions --------------------
+# (FILENAME: ui/metrology_dashboard_page.py - END PART 4/6)
+
+# FILENAME: ui/metrology_dashboard_page.py
+# (FILENAME: ui/metrology_dashboard_page.py - START PART 5/6)
+
+    # -------------------- actions (ne diramo logiku, samo stabilno) --------------------
     def _open_asset(self) -> None:
         asset_uid = self._selected_asset_uid()
         if not asset_uid:
@@ -1686,19 +1861,28 @@ class MetrologyDashboardPage(QWidget):
             dlg = AssetDetailDialog(asset_uid, self)
             dlg.exec()
         except Exception as e:
-            QMessageBox.information(self, "Info", f"Ne mogu da otvorim detalje sredstva.\n\n{e}")
+            try:
+                QMessageBox.information(self, "Info", f"Ne mogu da otvorim detalje sredstva.\n\n{e}")
+            except Exception:
+                pass
 
     def _open_metrology_details(self) -> None:
         met_uid = self._selected_met_uid()
         if not met_uid:
-            QMessageBox.information(self, "Info", "Nema metrologija zapisa (met_uid je prazan).")
+            try:
+                QMessageBox.information(self, "Info", "Nema metrologija zapisa (met_uid je prazan).")
+            except Exception:
+                pass
             return
         try:
             from ui.metrology_page import MetrologyDetailsDialog  # type: ignore
             dlg = MetrologyDetailsDialog(met_uid, parent=self, warn_days=self._warn_days())
             dlg.exec()
         except Exception as e:
-            QMessageBox.information(self, "Info", f"Ne mogu da otvorim detalje metrologije.\n\n{e}")
+            try:
+                QMessageBox.information(self, "Info", f"Ne mogu da otvorim detalje metrologije.\n\n{e}")
+            except Exception:
+                pass
 
     def _open_metrology_list(self) -> None:
         asset_uid = self._selected_asset_uid()
@@ -1709,9 +1893,13 @@ class MetrologyDashboardPage(QWidget):
             dlg = MetrologyForAssetDialog(asset_uid, warn_days=self._warn_days(), parent=self)
             dlg.exec()
         except Exception as e:
-            QMessageBox.information(self, "Info", f"Ne mogu da otvorim listu metrologije.\n\n{e}")
+            try:
+                QMessageBox.information(self, "Info", f"Ne mogu da otvorim listu metrologije.\n\n{e}")
+            except Exception:
+                pass
 
-    def _on_double_click(self, r: int, c: int) -> None:
+    def _on_double_click(self, _r: int, c: int) -> None:
+        # status/valid/met_uid kolone vode u metrologiju
         if c in (self.C_STATUS, self.C_VALID_UNTIL, self.C_MET_UID):
             if self._selected_met_uid():
                 self._open_metrology_details()
@@ -1746,21 +1934,41 @@ class MetrologyDashboardPage(QWidget):
             act_open_met_list = menu.addAction("Otvori metrologiju (lista)") if uid else None
 
             chosen = menu.exec(self.tbl.viewport().mapToGlobal(pos))
+
             if chosen == act_copy_cell:
                 _copy_text_to_clipboard(cell_text)
-            elif chosen == act_copy_sel:
+                return
+            if chosen == act_copy_sel:
                 copy_selected_cells(self.tbl)
-            elif act_copy_uid is not None and chosen == act_copy_uid:
-                _copy_text_to_clipboard(uid)
-            elif act_copy_met is not None and chosen == act_copy_met:
-                _copy_text_to_clipboard(met_uid)
-            elif act_open_asset is not None and chosen == act_open_asset:
-                self._open_asset()
-            elif act_open_met_details is not None and chosen == act_open_met_details:
-                self._open_metrology_details()
-            elif act_open_met_list is not None and chosen == act_open_met_list:
-                self._open_metrology_list()
-        except Exception:
-            pass
+                return
 
-# (FILENAME: ui/metrology_dashboard_page.py - END PART 3/3)
+            if act_copy_uid is not None and chosen == act_copy_uid:
+                _copy_text_to_clipboard(uid)
+                return
+            if act_copy_met is not None and chosen == act_copy_met:
+                _copy_text_to_clipboard(met_uid)
+                return
+
+            if act_open_asset is not None and chosen == act_open_asset:
+                self._open_asset()
+                return
+            if act_open_met_details is not None and chosen == act_open_met_details:
+                self._open_metrology_details()
+                return
+            if act_open_met_list is not None and chosen == act_open_met_list:
+                self._open_metrology_list()
+                return
+
+        except Exception:
+            # context menu je best-effort, bez rušenja UI-a
+            return
+
+# (FILENAME: ui/metrology_dashboard_page.py - END PART 5/6)
+
+# FILENAME: ui/metrology_dashboard_page.py
+# (FILENAME: ui/metrology_dashboard_page.py - START PART 6/6)
+
+# Public exports (da importovi budu čisti i stabilni)
+__all__ = ["MetrologyDashboardPage"]
+
+# (FILENAME: ui/metrology_dashboard_page.py - END PART 6/6)

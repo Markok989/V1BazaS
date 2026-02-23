@@ -1,5 +1,5 @@
 # FILENAME: core/db.py
-# (FILENAME: core/db.py - START PART 1/2)
+# (FILENAME: core/db.py - START PART 1/4)
 # -*- coding: utf-8 -*-
 """
 BazaS2 (offline) — core/db.py
@@ -33,11 +33,16 @@ REV (2026-02-12+):
 - Minimalna zaštita identifikatora (table/col) protiv SQL foot-gun
 - Clamp limit vrednosti (za list_* upite)
 - Kompatibilni aliasi ostaju
+
+Hardening (2026-02-22):
+- Migration v1: UNIQUE TOC index pravi se best-effort (ne ruši app ako legacy DB ima duplikate).
+- Write transakcije: schema ensure ide pre BEGIN IMMEDIATE (manje lock contention-a).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -45,6 +50,7 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple, Callable
 
+log = logging.getLogger(__name__)
 
 try:
     from core.paths import DB_PATH  # type: ignore
@@ -138,25 +144,40 @@ def get_db_path() -> str:
     return _resolve_db_path()
 
 
+def _apply_pragmas_best_effort(conn: sqlite3.Connection) -> None:
+    """
+    Best-effort PRAGMA set. Ne ruši app na mrežnim share-ovima / read-only / starim FS.
+    """
+    try:
+        conn.execute("PRAGMA foreign_keys = ON;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA busy_timeout = 5000;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA journal_mode = WAL;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA synchronous = NORMAL;")
+    except Exception:
+        pass
+
+
 def connect_db() -> sqlite3.Connection:
     """
     Vraca sqlite3.Connection (kompatibilno sa ostatkom sistema).
-    Napomena: sqlite3.Connection kao context manager NE zatvara konekciju.
-    Zato u ovom fajlu koristi db_conn() umesto `with connect_db() as conn:`.
+
+    ⚠️ Napomena:
+      sqlite3.Connection kao context manager NE zatvara konekciju.
+      Zato u ovom fajlu koristi db_conn() umesto `with connect_db() as conn:`.
     """
     db_path = _resolve_db_path()
     conn = sqlite3.connect(db_path, timeout=5.0)
     conn.row_factory = sqlite3.Row
-
-    try:
-        conn.execute("PRAGMA foreign_keys = ON;")
-        conn.execute("PRAGMA busy_timeout = 5000;")
-        conn.execute("PRAGMA journal_mode = WAL;")
-        conn.execute("PRAGMA synchronous = NORMAL;")
-    except Exception:
-        # Ako je DB na FS koji ne voli WAL, ili je read-only, ne rušimo aplikaciju.
-        pass
-
+    _apply_pragmas_best_effort(conn)
     return conn
 
 
@@ -396,8 +417,37 @@ def has_metrology_for_asset(asset_uid: str) -> bool:
 # =========================
 # MIGRATIONS
 # =========================
+# (FILENAME: core/db.py - END PART 1/4)
+
+# FILENAME: core/db.py
+# (FILENAME: core/db.py - START PART 2/4)
+def _try_create_assets_toc_unique_index(conn: sqlite3.Connection) -> None:
+    """
+    Best-effort: UNIQUE TOC index.
+    Legacy baze mogu već imati duplikate -> UNIQUE index pada.
+    Ne rušimo app, ali ostavljamo signal u logu.
+    """
+    # Partial unique index: enforce uniqueness only for non-empty values
+    sql = """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_toc_unique ON assets(toc_number)
+            WHERE toc_number IS NOT NULL AND toc_number <> '';
+    """
+    try:
+        conn.execute(sql)
+    except Exception as e:
+        try:
+            log.warning("TOC unique index not created (legacy duplicates?) — continuing. (%s)", e)
+        except Exception:
+            pass
+        # fallback non-unique index for performance (best-effort)
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_toc ON assets(toc_number);")
+        except Exception:
+            pass
+
 
 def _migration_v1(conn: sqlite3.Connection) -> None:
+    # NOTE: UNIQUE idx_assets_toc_unique se pravi best-effort posle executescript-a (vidi helper gore)
     conn.executescript(f"""
         CREATE TABLE IF NOT EXISTS assets (
             asset_uid TEXT PRIMARY KEY,
@@ -414,9 +464,6 @@ def _migration_v1(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
-
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_toc_unique ON assets(toc_number)
-            WHERE toc_number IS NOT NULL AND toc_number <> '';
 
         CREATE INDEX IF NOT EXISTS idx_assets_name ON assets(name);
         CREATE INDEX IF NOT EXISTS idx_assets_status ON assets(status);
@@ -443,6 +490,7 @@ def _migration_v1(conn: sqlite3.Connection) -> None:
             last_num INTEGER NOT NULL
         );
     """)
+    _try_create_assets_toc_unique_index(conn)
 
 
 def _migration_v2(conn: sqlite3.Connection) -> None:
@@ -506,6 +554,12 @@ def _migration_v4(conn: sqlite3.Connection) -> None:
         pass
     try:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_is_metrology ON assets(is_metrology);")
+    except Exception:
+        pass
+
+    # Best-effort: ensure TOC unique index exists when possible
+    try:
+        _try_create_assets_toc_unique_index(conn)
     except Exception:
         pass
 
@@ -612,6 +666,12 @@ def _migration_v7(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
+    # Best-effort: ensure TOC unique index exists when possible
+    try:
+        _try_create_assets_toc_unique_index(conn)
+    except Exception:
+        pass
+
 
 MIGRATIONS: List[Tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _migration_v1),
@@ -699,16 +759,9 @@ def generate_asset_rb(conn: sqlite3.Connection) -> int:
     return new_rb
 
 
-# (FILENAME: core/db.py - END PART 1/2)
-
-
-# FILENAME: core/db.py
-# (FILENAME: core/db.py - START PART 2/2)
-
-# (NAPOMENA) Nastavak istog modula; NEMA novog __future__ importa i NEMA duplih import-a.
-# Ovaj deo se oslanja na stvari definisane u PART 1/2:
-# db_conn, _migration_v*, row_to_dict, write_audit, write_asset_event, _diff_fields,
-# NOMENCLATURE_COL, _column_exists, _clamp_int, _now_iso, generate_asset_uid, generate_asset_rb
+# =========================
+# INTERNAL TX HELPERS
+# =========================
 
 def _begin_immediate(conn: sqlite3.Connection) -> None:
     """Pokušaj da podigneš write-lock rano (stabilnije pod opterećenjem)."""
@@ -783,7 +836,11 @@ def _ensure_schema_for_assignments(conn: sqlite3.Connection) -> None:
 # =========================
 # ASSETS (DB)
 # =========================
+# (FILENAME: core/db.py - END PART 2/4)
 
+
+# FILENAME: core/db.py
+# (FILENAME: core/db.py - START PART 3/4)
 def create_asset_db(
     actor: str,
     name: str,
@@ -808,11 +865,11 @@ def create_asset_db(
         raise ValueError(f"status must be one of: {sorted(allowed_status)}")
 
     with db_conn() as conn:
-        _begin_immediate(conn)
-
-        # fail-safe schema
+        # fail-safe schema pre lock-a (manje contention-a)
         _ensure_schema_for_assets(conn, with_events=True, with_rb=True)
         _commit_quiet(conn)
+
+        _begin_immediate(conn)
 
         try:
             rb = generate_asset_rb(conn)
@@ -953,10 +1010,11 @@ def update_asset_db(
     now = _now_iso()
 
     with db_conn() as conn:
-        _begin_immediate(conn)
-
+        # fail-safe schema pre lock-a
         _ensure_schema_for_assets(conn, with_events=True, with_rb=True)
         _commit_quiet(conn)
+
+        _begin_immediate(conn)
 
         try:
             before = row_to_dict(conn.execute("SELECT * FROM assets WHERE asset_uid=?;", (uid,)).fetchone())
@@ -1214,6 +1272,11 @@ def get_asset(*, asset_uid: str) -> Optional[Dict[str, Any]]:
     return get_asset_db(asset_uid)
 
 
+# (FILENAME: core/db.py - END PART 3/4)
+
+
+# FILENAME: core/db.py
+# (FILENAME: core/db.py - START PART 4/4)
 def list_assets(
     *,
     q: str = "",
@@ -1334,10 +1397,11 @@ def create_assignment_db(
         raise ValueError("asset_uid cannot be empty")
 
     with db_conn() as conn:
-        _begin_immediate(conn)
-
+        # fail-safe schema pre lock-a
         _ensure_schema_for_assignments(conn)
         _commit_quiet(conn)
+
+        _begin_immediate(conn)
 
         try:
             asset_before = row_to_dict(conn.execute("SELECT * FROM assets WHERE asset_uid=?;", (uid,)).fetchone())
@@ -1592,6 +1656,4 @@ def list_audit_global_db(
 
         rows = conn.execute(sql, tuple(params)).fetchall()
         return [{k: r[k] for k in r.keys()} for r in rows]
-
-
-# (FILENAME: core/db.py - END PART 2/2)
+# (FILENAME: core/db.py - END PART 4/4)

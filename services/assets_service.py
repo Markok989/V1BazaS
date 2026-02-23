@@ -9,17 +9,15 @@ Servis sloj za sredstva (assets) sa RBAC + scope filtriranjem (FAIL-CLOSED):
 - METRO: assets.metrology.view (metrology-scope)
 - MY: assets.my.view (samo sredstva koja korisnik trenutno duži)
 
-✅ Senior patch (2026-02):
-- FIX: list_assets/list_assets_brief sada prihvataju opcioni parametar `scope`
-  (ALL / MY / METRO + tolerantno na UI stringove “Sva sredstva”, “Moja oprema”, “Metrologija...”).
-  Time UI može eksplicitno da bira scope čak i kad korisnik ima više permisija.
-- FAIL-CLOSED: ako je traženi scope nedozvoljen, vraćamo “najbliži dozvoljeni” (fallback),
-  umesto curenja ili rušenja.
-- Stabilniji login check: require_login() potpis tolerantno (sa/bez src arg).
-- "Dve baze" guard: absolutizovanje DB putanje (relativno prema app root).
-- SQLite IN limit: chunkovanje batch upita (sprečava “too many SQL variables”).
-- Perf: cache za inspect.signature + schema cache (table/cols) vezan za PRAGMA user_version.
-- Stabilnost: logovanje izuzetaka (fail-soft) bez menjanja osnovne logike.
+REV (2026-02) — hardening + metrology-only konsolidacija:
+- FIX: MY identitet više NE koristi placeholder "user" (sprečava cross-user match).
+- FIX: metrology_only / METRO scope sada PRIMARNO znači assets.is_metrology==1 (ako kolona postoji).
+  Legacy fallback ostaje (metrology_records / heuristike) samo kad flag nije dostupan.
+- FIX: list_assets / list_assets_brief prosleđuju core.db `metrology_only` kada je tražen METRO
+  (nije se slalo ranije → UI je videla “sva sredstva” u metrology dijalozima).
+- Stabilniji SQLite schema cache: invalidacija preko PRAGMA user_version, a ako je 0 → schema_version table.
+- Perf: DB putanja keširana (sprečava “dve baze” + manje overhead-a).
+- Bez promene osnovne logike: i dalje FAIL-CLOSED + tolerantno na UI scope stringove.
 
 Napomena:
 - Offline only, bez interneta.
@@ -33,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple, Set, Iterable
 import inspect
 import logging
 import re
+import sqlite3
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +67,7 @@ _ASSETS_LIST_PERMS: List[str] = [PERM_ASSETS_VIEW, PERM_ASSETS_METRO_VIEW, PERM_
 
 
 # -------------------- Scope normalization (UI <-> Service contract) --------------------
+SCOPE_AUTO = "AUTO"
 SCOPE_ALL = "ALL"
 SCOPE_MY = "MY"
 SCOPE_METRO = "METRO"
@@ -75,13 +75,13 @@ SCOPE_METRO = "METRO"
 
 def _norm_scope(scope: Any) -> str:
     """
-    Normalizuje scope iz UI (srpski tekst) ili internog koda u jedan od:
+    Normalizuje scope iz UI (srpski tekst) ili internog koda u:
       - ALL, MY, METRO, ili "" (nepoznato / nije traženo)
 
     Tolerantno:
     - "Sva sredstva" -> ALL
     - "Moja oprema" -> MY
-    - "Metrologija (scope)" -> METRO
+    - "Metrologija..." -> METRO
     """
     s = ("" if scope is None else str(scope)).strip().casefold()
     if not s:
@@ -102,6 +102,16 @@ def _norm_scope(scope: Any) -> str:
         return SCOPE_METRO
 
     return ""
+
+
+def _parse_scope(scope: Any) -> str:
+    """
+    Jedan ulaz za scope: vraća AUTO/ALL/MY/METRO.
+    """
+    s = _norm_scope(scope)
+    if s in (SCOPE_ALL, SCOPE_MY, SCOPE_METRO):
+        return s
+    return SCOPE_AUTO
 
 
 def _safe_can(perm: str) -> bool:
@@ -136,12 +146,50 @@ def _require_login(src: str = "") -> None:
         raise PermissionError("Session nije dostupna (nisi prijavljen).")
 
 
-def _current_actor() -> str:
+def _actor_name_for_audit() -> str:
+    """
+    Audit identitet može fallback na "user" (nije security boundary).
+    """
     try:
         from core.session import actor_name  # type: ignore
         return (actor_name() or "").strip() or "user"
     except Exception:
         return "user"
+
+
+def _actor_key_for_identity() -> str:
+    """
+    Identitet za MY scope: bez placeholder-a.
+    Vraća "" ako ne znamo ko je user (fail-closed).
+    """
+    try:
+        from core.session import actor_key  # type: ignore
+        ak = (actor_key() or "").strip()
+    except Exception:
+        ak = ""
+    if not ak:
+        return ""
+    low = ak.strip().casefold()
+    if low == "user" or low == "unknown":
+        return ""
+    if low.startswith("user#0"):
+        return ""
+    return ak
+
+
+def _actor_name_for_identity() -> str:
+    """
+    Identitet za MY scope: bez placeholder-a.
+    """
+    try:
+        from core.session import actor_name  # type: ignore
+        an = (actor_name() or "").strip()
+    except Exception:
+        an = ""
+    low = an.casefold()
+    if not an or low == "user" or low == "unknown":
+        return ""
+    return an
 
 
 def _require_perm(perm: str, src: str = "") -> None:
@@ -297,25 +345,36 @@ def _sector_filter_rows(rows: List[Dict[str, Any]], sector: str, *, strict: bool
 
 # (FILENAME: services/assets_service.py - END PART 1/3)
 
-
 # FILENAME: services/assets_service.py
 # (FILENAME: services/assets_service.py - START PART 2/3)
 
 # -------------------- MY scope helpers --------------------
+_TOKEN_SPLIT_RE = re.compile(r"[^\w]+", flags=re.UNICODE)
+
+
 def _norm_text(x: Any) -> str:
     return ("" if x is None else str(x)).replace("\n", " ").replace("\r", " ").strip()
 
 
 def _identity_candidates() -> List[str]:
     """
-    Kandidati identiteta za MY scope:
-    - actor_name() (audit identitet)
-    - korisnički atributi iz sesije (username/login/email/display_name/name/full_name/account/user)
+    Kandidati identiteta za MY scope (bez placeholder-a):
+    - actor_key (username/id)  [najpouzdanije]
+    - actor_name              [display]
+    - atributi iz sesije: username/login/email/display_name/name/full_name/account/user
     - id/user_id/uid (kao string)
     Sve se normalizuje u lower-case, deduplikacija.
     """
     u = _get_current_user()
-    cand: List[str] = [_current_actor()]
+    cand: List[str] = []
+
+    ak = _actor_key_for_identity()
+    if ak:
+        cand.append(ak)
+
+    an = _actor_name_for_identity()
+    if an:
+        cand.append(an)
 
     for k in ("username", "login", "email", "display_name", "name", "full_name", "account", "user"):
         v = u.get(k)
@@ -330,7 +389,7 @@ def _identity_candidates() -> List[str]:
     out: List[str] = []
     seen = set()
     for c in cand:
-        cc = _norm_text(c).lower()
+        cc = _norm_text(c).casefold()
         if cc and cc not in seen:
             seen.add(cc)
             out.append(cc)
@@ -349,13 +408,20 @@ def _asset_holder_value(r: Dict[str, Any]) -> str:
     return ""
 
 
+def _tokens(s: str) -> Set[str]:
+    ss = _norm_text(s).casefold()
+    if not ss:
+        return set()
+    return {t for t in _TOKEN_SPLIT_RE.split(ss) if t}
+
+
 def _is_my_scope_asset(r: Dict[str, Any], *, cands: Optional[List[str]] = None) -> bool:
     """
     MY scope:
     - holder mora postojati
     - poklapanje:
       1) exact match (lower)
-      2) substring match (za display stringove), ali tek ako kandidat ima >=4 char
+      2) token match (bez “marko” -> “markovic” lažnih pogodaka)
     """
     if not isinstance(r, dict):
         return False
@@ -363,15 +429,24 @@ def _is_my_scope_asset(r: Dict[str, Any], *, cands: Optional[List[str]] = None) 
     if not holder:
         return False
 
-    h = holder.lower()
+    h = holder.casefold()
     cands2 = cands if cands is not None else _identity_candidates()
+    if not cands2:
+        return False
 
     for c in cands2:
         if c and h == c:
             return True
 
+    ht = _tokens(holder)
+    if not ht:
+        return False
+
     for c in cands2:
-        if c and len(c) >= 4 and c in h:
+        if not c:
+            continue
+        # token match, ali tek kad kandidat ima neku “težinu”
+        if len(c) >= 4 and c in ht:
             return True
     return False
 
@@ -450,6 +525,9 @@ def _app_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+_DB_PATH_CACHE: Optional[str] = None
+
+
 def _abspath_db(p: Any) -> str:
     try:
         pp = Path(str(p))
@@ -466,6 +544,10 @@ def _get_db_path_str() -> str:
     - pokušaj core.db.get_db_path / _resolve_db_path / core.paths.DB_PATH / core.config.DB_FILE
     - apsolutizuj putanju relativno prema app root
     """
+    global _DB_PATH_CACHE
+    if _DB_PATH_CACHE:
+        return _DB_PATH_CACHE
+
     db_path: Any = None
     try:
         from core.db import get_db_path as _get_db_path  # type: ignore
@@ -494,7 +576,8 @@ def _get_db_path_str() -> str:
         except Exception:
             db_path = "baza.db"
 
-    return _abspath_db(db_path)
+    _DB_PATH_CACHE = _abspath_db(db_path)
+    return _DB_PATH_CACHE
 
 
 def _iter_chunks(items: List[str], *, chunk_size: int = 800) -> Iterable[List[str]]:
@@ -504,36 +587,63 @@ def _iter_chunks(items: List[str], *, chunk_size: int = 800) -> Iterable[List[st
         yield items[i:i + chunk_size]
 
 
-# Schema cache po DB fajlu (invalidacija na user_version promenu)
-_SQLITE_SCHEMA_VER: Dict[str, int] = {}
+# Schema cache po DB fajlu (invalidacija na schema token promenu)
+_SQLITE_SCHEMA_TOKEN: Dict[str, int] = {}
 _SQLITE_TABLE_EXISTS_CACHE: Dict[Tuple[str, str], bool] = {}
 _SQLITE_COLS_CACHE: Dict[Tuple[str, str], Set[str]] = {}
 
 
-def _ensure_schema_cache_current(conn, db_path: str) -> None:
+def _schema_token(conn) -> int:
+    """
+    Stabilniji token od "user_version":
+    - ako PRAGMA user_version > 0 koristi ga
+    - inače, ako postoji schema_version tabela, koristi njen version
+    - fallback 0
+    """
+    uv = 0
     try:
         row = conn.execute("PRAGMA user_version;").fetchone()
         uv = int(row[0] if row else 0)
     except Exception:
         uv = 0
 
-    old = _SQLITE_SCHEMA_VER.get(db_path)
+    if uv > 0:
+        return uv
+
+    try:
+        r = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version' LIMIT 1;"
+        ).fetchone()
+        if not r:
+            return 0
+        row2 = conn.execute("SELECT version FROM schema_version WHERE id=1;").fetchone()
+        if not row2:
+            return 0
+        try:
+            return int(row2[0])
+        except Exception:
+            return int(row2["version"])  # type: ignore[index]
+    except Exception:
+        return 0
+
+
+def _ensure_schema_cache_current(conn, db_path: str) -> None:
+    tok = _schema_token(conn)
+    old = _SQLITE_SCHEMA_TOKEN.get(db_path)
     if old is None:
-        _SQLITE_SCHEMA_VER[db_path] = uv
+        _SQLITE_SCHEMA_TOKEN[db_path] = tok
         return
-    if old != uv:
+    if old != tok:
         # invalidiraj cache za taj DB
         for k in [k for k in _SQLITE_TABLE_EXISTS_CACHE.keys() if k[0] == db_path]:
             _SQLITE_TABLE_EXISTS_CACHE.pop(k, None)
         for k in [k for k in _SQLITE_COLS_CACHE.keys() if k[0] == db_path]:
             _SQLITE_COLS_CACHE.pop(k, None)
-        _SQLITE_SCHEMA_VER[db_path] = uv
+        _SQLITE_SCHEMA_TOKEN[db_path] = tok
 
 
 @contextmanager
 def _sqlite_conn():
-    import sqlite3
-
     db_path = _get_db_path_str()
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -618,6 +728,7 @@ def _sqlite_select_assets_basic(
         "location",
         "updated_at", "modified_at",
         "sector", "org_unit", "unit",
+        "is_metrology",  # ✅ bitno za METRO scope
     ]
     sel = [c for c in wanted if c in cols]
     if not sel:
@@ -651,10 +762,6 @@ def _sqlite_assets_have_any_nomen(conn) -> bool:
 
 
 def _sqlite_bulk_fetch_nomen(conn, uids: List[str]) -> Dict[str, str]:
-    """
-    Batch dopuna: asset_uid -> nomenklaturni broj (string).
-    Chunkuje IN listu da ne udari SQLite limit parametara.
-    """
     if not uids:
         return {}
     if not _sqlite_table_exists(conn, "assets"):
@@ -669,7 +776,6 @@ def _sqlite_bulk_fetch_nomen(conn, uids: List[str]) -> Dict[str, str]:
     if not candidates:
         return {}
 
-    # uzmi max 2 kandidata radi brzine (dovoljno je da nađemo neku vrednost)
     sel = ["asset_uid"] + candidates[:2]
     out: Dict[str, str] = {}
 
@@ -726,6 +832,13 @@ def _norm_asset_row(r: Dict[str, Any]) -> Dict[str, Any]:
     if sn and not rr.get("serial_number"):
         rr["serial_number"] = sn
 
+    # is_metrology normalize (0/1)
+    if "is_metrology" in rr:
+        try:
+            rr["is_metrology"] = 1 if int(rr.get("is_metrology") or 0) == 1 else 0
+        except Exception:
+            rr["is_metrology"] = 0
+
     # Nomenclature canonicalize -> uvek popuni oba ključa ako ima vrednosti
     canon_val = _norm_nomenclature_value(rr.get(NOMENCLATURE_CANON_KEY))
     legacy_val = _norm_nomenclature_value(rr.get(NOMENCLATURE_LEGACY_KEY))
@@ -753,10 +866,6 @@ def _norm_asset_row(r: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _enrich_rows_with_nomen_if_missing(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Ako core.db list_* ne vraća nomenklaturni broj u listi, dopuni preko SQLite (batch).
-    Ostavlja postojeće vrednosti netaknute.
-    """
     only = [r for r in rows if isinstance(r, dict) and r]
     if not only:
         return rows
@@ -773,7 +882,6 @@ def _enrich_rows_with_nomen_if_missing(rows: List[Dict[str, Any]]) -> List[Dict[
     if not need_uids:
         return rows
 
-    # dedupe
     seen = set()
     need_uids2: List[str] = []
     for u in need_uids:
@@ -817,6 +925,23 @@ def missing_fields_for_asset(asset: Dict[str, Any]) -> List[str]:
 # (FILENAME: services/assets_service.py - START PART 3/3)
 
 # -------------------- Metrology-scope --------------------
+def _row_metrology_flag(r: Dict[str, Any]) -> Optional[bool]:
+    """
+    Vraća True/False ako imamo eksplicitni flag u redu.
+    None ako nema informacije (legacy).
+    """
+    if not isinstance(r, dict):
+        return None
+
+    for k in ("is_metrology", "is_metro", "metrology_flag", "metro_flag", "metrology_scope"):
+        if k in r:
+            try:
+                return bool(int(r.get(k) or 0) == 1)
+            except Exception:
+                return bool(r.get(k))
+    return None
+
+
 def _asset_has_metrology_record(asset_uid: str) -> bool:
     uid = (asset_uid or "").strip()
     if not uid:
@@ -843,17 +968,18 @@ def _asset_has_metrology_record(asset_uid: str) -> bool:
     return False
 
 
-def _bulk_metrology_uids(conn, uids: List[str]) -> Set[str]:
+def _bulk_assets_metrology_flag(conn, uids: List[str]) -> Set[str]:
+    """
+    Bulk fetch: vrati set asset_uid gde je is_metrology=1 (ako kolona postoji).
+    Ako nema kolone ili tabele -> prazan set.
+    """
     out: Set[str] = set()
     if not uids:
         return out
-
-    table = ""
-    for t in ("metrology_records", "metrology", "calibration_records"):
-        if _sqlite_table_exists(conn, t) and ("asset_uid" in _sqlite_cols(conn, t)):
-            table = t
-            break
-    if not table:
+    if not _sqlite_table_exists(conn, "assets"):
+        return out
+    cols = _sqlite_cols(conn, "assets")
+    if "asset_uid" not in cols or "is_metrology" not in cols:
         return out
 
     try:
@@ -863,27 +989,41 @@ def _bulk_metrology_uids(conn, uids: List[str]) -> Set[str]:
             conn.executemany("INSERT OR IGNORE INTO tmp_uids(uid) VALUES(?);", [(u,) for u in chunk])
 
         rows = conn.execute(
-            f"SELECT DISTINCT m.asset_uid FROM {table} m JOIN tmp_uids u ON u.uid=m.asset_uid;"
+            "SELECT a.asset_uid FROM assets a JOIN tmp_uids u ON u.uid=a.asset_uid WHERE COALESCE(a.is_metrology,0)=1;"
         ).fetchall()
         out = {str(r[0] or "").strip() for r in rows if str(r[0] or "").strip()}
     except Exception:
         return set()
-
     return out
 
 
-def _is_metrology_scope_asset(r: Dict[str, Any], *, met_uids: Optional[Set[str]] = None) -> bool:
+def _is_metrology_scope_asset(r: Dict[str, Any], *, met_flag_uids: Optional[Set[str]] = None) -> bool:
+    """
+    METRO scope pravilo:
+    - Ako imamo is_metrology flag (u redu ili u šemi) -> samo flag=1
+    - Legacy fallback (ako flag nije dostupan): heuristike + metrology_records existence
+    """
     if not isinstance(r, dict):
         return False
 
+    uid = str(r.get("asset_uid") or "").strip()
+    if not uid:
+        return False
+
+    f = _row_metrology_flag(r)
+    if f is not None:
+        return bool(f)
+
+    if met_flag_uids is not None:
+        return uid in met_flag_uids
+
+    # Legacy fallback: (samo kad nemamo flag)
     cat = (r.get("category") or r.get("kategorija") or "").strip().lower()
     if cat and ("metrolog" in cat or cat in {"merna oprema", "merni uredjaji", "merni uređaji"}):
         return True
 
     for k in (
-        "is_metrology", "metrology_flag", "flag_metrology",
         "needs_calibration", "calibration_required", "is_calibration_asset",
-        "metrology_scope",
     ):
         if k in r:
             try:
@@ -891,13 +1031,6 @@ def _is_metrology_scope_asset(r: Dict[str, Any], *, met_uids: Optional[Set[str]]
                     return True
             except Exception:
                 pass
-
-    uid = (r.get("asset_uid") or "").strip()
-    if not uid:
-        return False
-
-    if met_uids is not None:
-        return uid in met_uids
 
     return _asset_has_metrology_record(uid)
 
@@ -907,19 +1040,25 @@ def _metrology_scope_filter(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not only:
         return []
 
-    # Ako postoji DB helper, čuvamo per-row logiku (kompatibilnost).
-    if _db_asset_has_metrology is not None:
-        return [r for r in only if _is_metrology_scope_asset(r)]
+    # Ako makar jedan red ima eksplicitni flag key, koristimo samo to (najsigurnije).
+    has_flag_in_rows = any(_row_metrology_flag(r) is not None for r in only)
+    if has_flag_in_rows:
+        return [r for r in only if bool(_row_metrology_flag(r) is True)]
 
+    # Ako nemamo flag u rezultatima, ali šema možda ima kolonu -> bulk fetch flags.
     uids = [str(r.get("asset_uid") or "").strip() for r in only if str(r.get("asset_uid") or "").strip()]
     met_set: Optional[Set[str]] = None
     try:
         with _sqlite_conn() as conn:
-            met_set = _bulk_metrology_uids(conn, uids)
+            met_set = _bulk_assets_metrology_flag(conn, uids)
     except Exception:
         met_set = None
 
-    return [r for r in only if _is_metrology_scope_asset(r, met_uids=met_set)]
+    if met_set is not None and len(met_set) > 0:
+        return [r for r in only if _is_metrology_scope_asset(r, met_flag_uids=met_set)]
+
+    # Legacy fallback (nema kolone ili nije dostupno)
+    return [r for r in only if _is_metrology_scope_asset(r)]
 
 
 def _enforce_scope_one(asset: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -948,38 +1087,12 @@ def _enforce_scope_one(asset: Optional[Dict[str, Any]]) -> Optional[Dict[str, An
 
 
 # -------------------- Requested scope (UI switch) --------------------
-_SCOPE_AUTO = "AUTO"
-_SCOPE_ALL = "ALL"
-_SCOPE_MY = "MY"
-_SCOPE_METRO = "METRO"
-
-
-def _parse_scope(scope: str) -> str:
-    """
-    Normalizuje scope input (UI tekst ili token).
-    Prihvata:
-      - "ALL"/"MY"/"METRO"
-      - UI stringove: "Sva sredstva", "Moja oprema", "Metrologija (scope)"
-    """
-    s = (scope or "").strip().casefold()
-    if not s:
-        return _SCOPE_AUTO
-    if s in ("all", "sva", "sva sredstva", "sredstva", "assets"):
-        return _SCOPE_ALL
-    if "moja" in s or s in ("my", "mine"):
-        return _SCOPE_MY
-    if "metro" in s or "metrolog" in s:
-        return _SCOPE_METRO
-    # nepoznato -> AUTO (fail-safe)
-    return _SCOPE_AUTO
-
-
-def _choose_effective_scope(requested: str) -> str:
+def _choose_effective_scope(requested: Any) -> str:
     """
     Bira stvarni scope koji smemo da damo (FAIL-CLOSED).
-    - Ako je requested=ALL -> treba assets.view, inače fallback.
-    - Ako je requested=MY -> treba assets.my.view ili assets.view
-    - Ako je requested=METRO -> treba assets.metrology.view ili assets.view
+    - requested=ALL -> treba assets.view, inače fallback.
+    - requested=MY -> treba assets.my.view ili assets.view
+    - requested=METRO -> treba assets.metrology.view ili assets.view
     - AUTO -> prefer FULL, zatim METRO, zatim MY (stari behavior)
     """
     req = _parse_scope(requested)
@@ -988,58 +1101,65 @@ def _choose_effective_scope(requested: str) -> str:
     has_metro = _has_metro_assets_view()
     has_my = _has_my_assets_view()
 
-    if req == _SCOPE_ALL:
+    if req == SCOPE_ALL:
         if has_full:
-            return _SCOPE_ALL
-        # fallback (UI ne bi trebalo da traži ALL bez full perms, ali fail-safe)
+            return SCOPE_ALL
         if has_metro:
-            return _SCOPE_METRO
+            return SCOPE_METRO
         if has_my:
-            return _SCOPE_MY
-        return _SCOPE_AUTO
+            return SCOPE_MY
+        return SCOPE_AUTO
 
-    if req == _SCOPE_METRO:
+    if req == SCOPE_METRO:
         if has_full or has_metro:
-            return _SCOPE_METRO
+            return SCOPE_METRO
         if has_my:
-            return _SCOPE_MY
-        return _SCOPE_AUTO
+            return SCOPE_MY
+        return SCOPE_AUTO
 
-    if req == _SCOPE_MY:
+    if req == SCOPE_MY:
         if has_full or has_my:
-            return _SCOPE_MY
+            return SCOPE_MY
         if has_metro:
-            return _SCOPE_METRO
-        return _SCOPE_AUTO
+            return SCOPE_METRO
+        return SCOPE_AUTO
 
-    # AUTO (stara precedenca)
+    # AUTO
     if has_full:
-        return _SCOPE_ALL
+        return SCOPE_ALL
     if has_metro:
-        return _SCOPE_METRO
+        return SCOPE_METRO
     if has_my:
-        return _SCOPE_MY
-    return _SCOPE_AUTO
+        return SCOPE_MY
+    return SCOPE_AUTO
 
 
-def _apply_list_scope(rows: List[Dict[str, Any]], *, requested_scope: str = "") -> List[Dict[str, Any]]:
+def _apply_list_scope(
+    rows: List[Dict[str, Any]],
+    *,
+    requested_scope: Any = "",
+    metrology_only: Optional[bool] = None,
+) -> List[Dict[str, Any]]:
     """
     Centralizovano scope filtriranje za list_* pozive.
-    - Ako UI prosledi scope (requested_scope), poštujemo ga ako je dozvoljen.
-    - Ako nije prosleđen, zadržava se stara precedenca FULL -> METRO -> MY.
+    - Ako UI prosledi scope, poštujemo ga ako je dozvoljen.
+    - metrology_only=True forsira METRO (ali i dalje RBAC/sector važe).
     - Sector-scope (REFERENT_METRO) kao dodatni FAIL-CLOSED filter.
     """
     is_sector = _is_sector_scoped_metro()
     sector = _current_sector() if is_sector else ""
 
-    eff = _choose_effective_scope(requested_scope)
+    req_scope = requested_scope
+    if metrology_only is True:
+        req_scope = SCOPE_METRO
 
-    if eff == _SCOPE_ALL:
-        # FULL prikaz (nema filtriranja), ali fail-closed ako nema perms (eff ne bi bio ALL tada)
+    eff = _choose_effective_scope(req_scope)
+
+    if eff == SCOPE_ALL:
         out = rows
-    elif eff == _SCOPE_METRO:
+    elif eff == SCOPE_METRO:
         out = _metrology_scope_filter(rows)
-    elif eff == _SCOPE_MY:
+    elif eff == SCOPE_MY:
         out = _my_scope_filter(rows)
     else:
         out = []
@@ -1051,10 +1171,20 @@ def _apply_list_scope(rows: List[Dict[str, Any]], *, requested_scope: str = "") 
 
 
 # -------------------- SQLite search helpers --------------------
-def _sqlite_build_where(cols_in: Set[str], *, final_q: str, category: str, status: str) -> Tuple[str, List[Any]]:
+def _sqlite_build_where(
+    cols_in: Set[str],
+    *,
+    final_q: str,
+    category: str,
+    status: str,
+    metrology_only: bool = False,
+) -> Tuple[str, List[Any]]:
     cols = _safe_cols(set(cols_in))
     where: List[str] = []
     params: List[Any] = []
+
+    if metrology_only and "is_metrology" in cols:
+        where.append("COALESCE(is_metrology,0)=1")
 
     cat = (category or "SVE").strip()
     if cat and cat.upper() != "SVE" and "category" in cols:
@@ -1088,12 +1218,12 @@ def _sqlite_build_where(cols_in: Set[str], *, final_q: str, category: str, statu
     return " AND ".join(where), params
 
 
-def _sqlite_list_assets(*, final_q: str, category: str, status: str, limit: int) -> List[Dict[str, Any]]:
+def _sqlite_list_assets(*, final_q: str, category: str, status: str, limit: int, metrology_only: bool = False) -> List[Dict[str, Any]]:
     with _sqlite_conn() as conn:
         if not _sqlite_table_exists(conn, "assets"):
             return []
         cols = _sqlite_cols(conn, "assets")
-        where_sql, params = _sqlite_build_where(cols, final_q=final_q, category=category, status=status)
+        where_sql, params = _sqlite_build_where(cols, final_q=final_q, category=category, status=status, metrology_only=metrology_only)
         rows = _sqlite_select_assets_basic(conn, limit=limit, where_sql=where_sql, params=tuple(params))
         normed = [r for r in (_norm_asset_row(x) for x in rows) if isinstance(r, dict)]
         return _enrich_rows_with_nomen_if_missing(normed)
@@ -1122,7 +1252,7 @@ def create_asset(
     _require_perm(PERM_ASSETS_CREATE, "assets.create_asset")
 
     # actor param zadržan radi kompatibilnosti, ali audit prati sesiju
-    actor_eff = _current_actor()
+    actor_eff = _actor_name_for_audit()
 
     if toc is None and toc_number is not None:
         toc = str(toc_number).strip()
@@ -1184,17 +1314,25 @@ def list_assets(
     category: str = "SVE",
     status: str = "SVE",
     limit: int = 5000,
-    scope: str = "",  # ✅ NOVO: UI može da bira ALL/MY/METRO (fail-closed)
+    scope: Any = "",                        # ✅ UI scope switch
+    metrology_only: Optional[bool] = None,  # ✅ kompat (True => METRO)
 ) -> List[Dict[str, Any]]:
     """
     Vraća listu sredstava uz FAIL-CLOSED RBAC i scope.
     - Ako scope nije zadat: stara precedenca (FULL->METRO->MY).
-    - Ako scope jeste: poštujemo ga ako je dozvoljen, inače fallback.
+    - metrology_only=True -> forsira METRO i pokušava DB filter.
     """
     _require_perm_any(_ASSETS_LIST_PERMS, "assets.list_assets")
 
     final_q = (q or "").strip() or (search or "").strip()
     lim = _clamp_limit(limit, 5000)
+
+    eff_scope = scope
+    if metrology_only is True:
+        eff_scope = SCOPE_METRO
+
+    eff = _choose_effective_scope(eff_scope)
+    want_metro_only = (eff == SCOPE_METRO)
 
     # pokušaj DB sloj (core.db)
     if _db_list_assets is not None:
@@ -1204,11 +1342,21 @@ def list_assets(
             category=(category or "SVE"),
             status=(status or "SVE"),
             limit=lim,
-            sector=_current_sector() if _is_sector_scoped_metro() else "",
-            scope=_choose_effective_scope(scope),  # ✅ dropuje se ako DB ne zna parametar
+            sector=_current_sector() if _is_sector_scoped_metro() else "SVE",
+            metrology_only=bool(want_metro_only),
         )
+
         try:
             res = _call_compatible(_db_list_assets, **payload)
+        except sqlite3.OperationalError as e:
+            # legacy DB bez kolone: retry bez metrology_only (fail-soft, a filter će se uraditi servisno)
+            msg = str(e).lower()
+            if "no such column" in msg and "is_metrology" in msg:
+                payload.pop("metrology_only", None)
+                res = _call_compatible(_db_list_assets, **payload)
+            else:
+                logger.exception("core.db.list_assets failed: %s", e)
+                res = []
         except Exception as e:
             logger.exception("core.db.list_assets failed: %s", e)
             res = []
@@ -1222,12 +1370,12 @@ def list_assets(
         rows = [(_norm_asset_row(r) if isinstance(r, dict) else {}) for r in res]  # type: ignore
         rows = [r for r in rows if isinstance(r, dict) and r]
         rows = _enrich_rows_with_nomen_if_missing(rows)
-        return _apply_list_scope(rows, requested_scope=scope)
+        return _apply_list_scope(rows, requested_scope=eff_scope, metrology_only=metrology_only)
 
     # sqlite fallback
     try:
-        rows2 = _sqlite_list_assets(final_q=final_q, category=category, status=status, limit=lim)
-        return _apply_list_scope(rows2, requested_scope=scope)
+        rows2 = _sqlite_list_assets(final_q=final_q, category=category, status=status, limit=lim, metrology_only=want_metro_only)
+        return _apply_list_scope(rows2, requested_scope=eff_scope, metrology_only=metrology_only)
     except Exception as e:
         logger.exception("sqlite list_assets failed: %s", e)
         return []
@@ -1236,31 +1384,47 @@ def list_assets(
 def list_assets_brief(
     *,
     limit: int = 1000,
-    scope: str = "",               # ✅ NOVO: UI scope switch radi i za brief
-    metrology_only: Optional[bool] = None,  # ✅ kompatibilnost sa starim pozivima
+    scope: Any = "",                         # ✅ UI scope switch radi i za brief
+    metrology_only: Optional[bool] = None,   # ✅ kompat
 ) -> List[Dict[str, Any]]:
     """
     Brief list (manje kolona), uz FAIL-CLOSED RBAC + scope.
-    metrology_only=True => scope=METRO (ali i dalje RBAC/sector važe).
+    metrology_only=True => forsira METRO (ali i dalje RBAC/sector važe).
     """
     _require_perm_any(_ASSETS_LIST_PERMS, "assets.list_assets_brief")
     lim = _clamp_limit(limit, 1000)
 
     eff_scope = scope
     if metrology_only is True:
-        eff_scope = _SCOPE_METRO
+        eff_scope = SCOPE_METRO
+
+    eff = _choose_effective_scope(eff_scope)
+    want_metro_only = (eff == SCOPE_METRO)
 
     if _db_list_assets_brief is not None:
         try:
             res = _call_compatible(
                 _db_list_assets_brief,
                 limit=lim,
-                sector=_current_sector() if _is_sector_scoped_metro() else "",
-                scope=_choose_effective_scope(eff_scope),
+                sector=_current_sector() if _is_sector_scoped_metro() else "SVE",
+                metrology_only=bool(want_metro_only),
             )
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if "no such column" in msg and "is_metrology" in msg:
+                # retry bez metrology_only (servisni filter)
+                res = _call_compatible(
+                    _db_list_assets_brief,
+                    limit=lim,
+                    sector=_current_sector() if _is_sector_scoped_metro() else "SVE",
+                )
+            else:
+                logger.exception("core.db.list_assets_brief failed: %s", e)
+                res = []
         except Exception as e:
             logger.exception("core.db.list_assets_brief failed: %s", e)
             res = []
+
         if not isinstance(res, list):
             try:
                 res = list(res)  # type: ignore
@@ -1280,7 +1444,7 @@ def list_assets_brief(
             return []
 
     rows = _enrich_rows_with_nomen_if_missing(rows)
-    return _apply_list_scope(rows, requested_scope=eff_scope)
+    return _apply_list_scope(rows, requested_scope=eff_scope, metrology_only=metrology_only)
 
 
 def get_asset_by_uid(*, asset_uid: str) -> Optional[Dict[str, Any]]:
@@ -1353,7 +1517,7 @@ def list_assets_my(
     """
     _require_login("assets.list_assets_my")
     _require_perm_any([PERM_ASSETS_VIEW, PERM_ASSETS_MY_VIEW], "assets.list_assets_my")
-    return list_assets(q=q, search=search, category=category, status=status, limit=limit, scope=_SCOPE_MY)
+    return list_assets(q=q, search=search, category=category, status=status, limit=limit, scope=SCOPE_MY)
 
 
 # alias (kompatibilnost)

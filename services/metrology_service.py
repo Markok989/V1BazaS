@@ -18,40 +18,41 @@ RBAC (service-level, fail-closed):
 SCOPE (anti-"curenje"):
 - Primarno: core.session.effective_scope() => ALL | SECTOR | MY
 - Fail-safe: ALL je dozvoljen samo ADMIN-u (ako dođe ALL a nije admin -> SECTOR)
-- DOPUNA (po tvom zahtevu): SECTOR_ADMIN + REFERENT_* preferiraju SECTOR
-  čak i ako session vrati MY — ali SAMO ako je SECTOR tehnički moguć (assets tabela + sector kolona + current_sector).
+- DOPUNA: SECTOR_ADMIN + REFERENT_* preferiraju SECTOR čak i ako session vrati MY —
+  ali SAMO ako je SECTOR tehnički moguć (assets + sector kolona + current_sector).
   Ako nije moguće, vraćamo se na MY (fail-closed, ali funkcionalno).
-- manage -> implicitno ALL (ali i dalje mora metrology.view/edit za read/write gate)
-- SECTOR/MY -> filtriranje ide SQL-first preko JOIN assets + predicate
-- Orphan records:
-    * ALL/manage: vidi i orphan (metrology_records bez assets reda)
-    * SECTOR/MY: orphan se NE vidi (fail-closed)
 
-Kompatibilnost sa UI:
-- list_metrology_records(q, limit, warn_days)
-- list_metrology_audit(met_uid, limit)
-- list_metrology_records_for_asset(asset_uid, ...)
+NOVO (po tvom zahtevu, bez promene UI):
+1) Metrologija prikazuje SAMO sredstva sa flagom "is_metrology=1" (ako kolona postoji).
+   - Važi za sve role/scope režime.
+   - Ako kolona ne postoji u legacy bazi, ponašanje ostaje kompatibilno (bez hard blokade).
+2) Status je "NEPOZNATO" ako NIJE unet datum etaloniranja (calib_date).
+   - Ako calib_date postoji → status se računa po valid_until kao do sada.
 
-MY API (kompat):
-- list_metrology_records_my(...) (fail-closed),
-  baziran na assets_service.list_assets_my() → asset_uid ∈ MY.
-- FIX: sprečen SQLite "too many SQL variables" u MY list (TEMP table approach).
-
-Senior hardening (2026-02):
-- FIX: _actor_key/_actor_name za MY identitet više ne koriste "user" placeholder (sprečava lažna poklapanja).
-- FIX: Centralizovan _resolved_scope(conn) sa SECTOR preferencom za sektor-role i sigurnim fallbackom na MY.
-- Stabilnost: manje “0=1” slučajeva kada SECTOR nije moguć (umesto toga MY fallback).
+Stabilnost:
+- FIX: više ne koristimo `with connect_db() as conn:` (ne zatvara konekciju).
+  Koristimo db_conn() (ako postoji) ili lokalni close-context fallback.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.db import connect_db  # treba da postoji u projektu (WAL/busy_timeout/putanja)
+log = logging.getLogger(__name__)
+
+# core.db: prefer db_conn() (closes), fallback to connect_db only if needed
+try:
+    from core.db import db_conn as _db_conn  # type: ignore
+except Exception:  # pragma: no cover
+    _db_conn = None  # type: ignore
+
+from core.db import connect_db  # type: ignore  # postoji u projektu (WAL/busy_timeout/putanja)
 
 CALIB_TYPES = ["interno", "domace_eksterno", "inostrano"]
 
@@ -95,6 +96,28 @@ _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY = False
 
 
+@contextmanager
+def _conn_ctx():
+    """
+    UVEK zatvara sqlite konekciju:
+    - prefer core.db.db_conn() (ako postoji)
+    - fallback: connect_db() + close()
+    """
+    if callable(_db_conn):
+        with _db_conn() as c:  # type: ignore[misc]
+            yield c
+        return
+
+    c = connect_db()
+    try:
+        yield c
+    finally:
+        try:
+            c.close()
+        except Exception:
+            pass
+
+
 # -------------------- RBAC/session helpers (FAIL-CLOSED) --------------------
 def _safe_can(perm: str) -> bool:
     try:
@@ -134,7 +157,6 @@ def _active_role_safe() -> str:
         from core.session import active_role  # type: ignore
         return str(active_role() or "").strip().upper()
     except Exception:
-        # fallback (best-effort)
         try:
             from core.session import get_current_user  # type: ignore
             u = get_current_user() or {}
@@ -181,9 +203,7 @@ def _actor_key_for_scope() -> str:
 
 
 def _actor_name_for_scope() -> str:
-    """
-    Za MY identitet: bez placeholder-a.
-    """
+    """Za MY identitet: bez placeholder-a."""
     try:
         from core.session import actor_name  # type: ignore
         return (actor_name() or "").strip()
@@ -280,7 +300,7 @@ def ensure_metrology_schema() -> None:
         if _SCHEMA_READY:
             return
 
-        with connect_db() as conn:
+        with _conn_ctx() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS metrology_records (
@@ -319,7 +339,10 @@ def ensure_metrology_schema() -> None:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_metrology_audit_met_uid ON metrology_audit(met_uid);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_metrology_audit_ts ON metrology_audit(ts);")
-            conn.commit()
+            try:
+                conn.commit()
+            except Exception:
+                pass
 
         _SCHEMA_READY = True
 
@@ -411,6 +434,10 @@ def _validate_calib_type(calib_type: str) -> str:
 
 
 def status_for_valid_until(valid_until: Any, warn_days: int = 30) -> str:
+    """
+    Kompat helper (ostaje).
+    Status je baziran na valid_until (ako je prazno/invalidno -> NEPOZNATO).
+    """
     vu = _normalize_date_str(valid_until)
     if not vu:
         return "NEPOZNATO"
@@ -433,6 +460,18 @@ def status_for_valid_until(valid_until: Any, warn_days: int = 30) -> str:
     if (vu_date - today).days <= wd:
         return "ISTICE"
     return "OK"
+
+
+def status_for_record(calib_date: Any, valid_until: Any, warn_days: int = 30) -> str:
+    """
+    NOVO (po zahtevu):
+    - ako calib_date nije unet -> NEPOZNATO (bez obzira na valid_until)
+    - inače koristi valid_until status
+    """
+    cd = _normalize_date_str(calib_date)
+    if not cd:
+        return "NEPOZNATO"
+    return status_for_valid_until(valid_until, warn_days=warn_days)
 
 # (FILENAME: services/metrology_service.py - END PART 1/3)
 
@@ -463,9 +502,7 @@ def _assets_is_metro_col(conn: sqlite3.Connection) -> str:
     """
     Metrology flag kolona je OPTIONAL.
     Ako postoji:
-      - za REFERENT_METRO dodatno zahtevamo flag=1 (SECTOR i MY)
-    Ako ne postoji:
-      - ne blokiramo (filter već postoji preko postojanja metrology_records)
+      - možemo enforce-ovati prikaz "samo metrologija"
     """
     if not _table_exists(conn, "assets"):
         return ""
@@ -476,18 +513,53 @@ def _assets_is_metro_col(conn: sqlite3.Connection) -> str:
     return ""
 
 
+def _metrology_only_sql(conn: sqlite3.Connection, alias: str = "a") -> str:
+    """
+    SQL uslov za 'samo sredstva koja imaju metrologija flag'.
+    Ako ne možemo detektovati kolonu -> vrati "" (ne blokiramo legacy baze).
+    """
+    mcol = _assets_is_metro_col(conn)
+    if not mcol:
+        return ""
+    if not _is_safe_ident(alias) or not _is_safe_ident(mcol):
+        return ""
+    return f"COALESCE({alias}.{mcol},0) = 1"
+
+
+def _asset_is_metrology_flag(conn: sqlite3.Connection, asset_uid: str) -> Optional[bool]:
+    """
+    True/False ako možemo proveriti flag (assets + is_metrology kolona).
+    None ako ne možemo proveriti (legacy schema) -> ne blokiramo.
+    """
+    au = (asset_uid or "").strip()
+    if not au:
+        return False
+    if not _table_exists(conn, "assets"):
+        return None
+    mcol = _assets_is_metro_col(conn)
+    if not mcol:
+        return None
+    try:
+        row = conn.execute(
+            f"SELECT COALESCE({mcol},0) AS v FROM assets WHERE asset_uid=? LIMIT 1;",
+            (au,),
+        ).fetchone()
+        if not row:
+            return False
+        try:
+            v = row["v"]  # type: ignore[index]
+        except Exception:
+            v = row[0]
+        return bool(int(v or 0) == 1)
+    except Exception:
+        return None
+
+
 def _norm(s: str) -> str:
     return (s or "").strip().casefold()
 
 
 def _identity_candidates() -> List[str]:
-    """
-    Kandidati identiteta za MY-scope:
-    - actor_key (username/id)  [bez placeholder-a]
-    - actor_name (display)     [bez placeholder-a]
-    - username/login/email/id...
-    Vraća NORMALIZOVANO (casefold+trim), bez duplikata.
-    """
     u = _get_current_user_dict()
     cand: List[str] = []
 
@@ -537,7 +609,6 @@ def _sector_possible(conn: sqlite3.Connection) -> bool:
         return False
     if not _current_sector_safe():
         return False
-    # Referent metro mora imati assets.metrology.view (tvoj zahtev)
     if _is_referent_metro() and (not _safe_can(PERM_ASSETS_METRO_VIEW)):
         return False
     return True
@@ -554,16 +625,6 @@ def _my_possible(conn: sqlite3.Connection) -> bool:
 
 
 def _resolved_scope(conn: sqlite3.Connection) -> str:
-    """
-    Centralno rešavanje scope-a sa bezbednim fallbackom:
-
-    1) Uzimamo scope iz session (ALL/SECTOR/MY).
-    2) ALL je dozvoljen samo ADMIN-u; u suprotnom -> SECTOR.
-    3) Ako je scope=MY ali rola je "sector role" (SECTOR_ADMIN/REFERENT_*),
-       preferiramo SECTOR *ako je tehnički moguć*; inače ostajemo na MY.
-    4) Ako je scope=SECTOR ali nije moguće (nema kolone/sektora), fallback na MY ako može.
-    5) Uvek fail-closed: ako MY nije moguće, kasnije predicate padne na 0=1.
-    """
     role = _active_role_safe()
     sc = _effective_scope_from_session()
 
@@ -575,13 +636,11 @@ def _resolved_scope(conn: sqlite3.Connection) -> str:
     if sc == "ALL":
         return "ALL"
 
-    # prefer SECTOR for sector-role, even if session says MY (your requirement)
     if sc == "MY" and _is_sector_role(role):
         if _sector_possible(conn):
             return "SECTOR"
         return "MY"
 
-    # if session says SECTOR but not possible, fallback to MY if possible
     if sc == "SECTOR" and (not _sector_possible(conn)):
         return "MY" if _my_possible(conn) else "MY"
 
@@ -594,11 +653,11 @@ def _sql_scope_predicate(conn: sqlite3.Connection) -> Tuple[str, List[Any]]:
 
     Pravila:
     - ALL: 1=1
-    - SECTOR: sector match; + (referent_metro && flag postoji) => flag=1
-    - MY: holder match (casefold); + (referent_metro && flag postoji) => flag=1
+    - SECTOR: sector match
+    - MY: holder match (casefold)
 
-    FAIL-CLOSED:
-    - ako fali assets ili potrebne kolone/identitet -> 0=1
+    DODATO:
+    - Metrologija-only: ako postoji is_metrology kolona -> AND is_metrology=1 (ZA SVE osim ALL koji se rešava u list_*)
     """
     sc = _resolved_scope(conn)
 
@@ -608,11 +667,12 @@ def _sql_scope_predicate(conn: sqlite3.Connection) -> Tuple[str, List[Any]]:
     if not _table_exists(conn, "assets"):
         return "0=1", []
 
+    metro_only = _metrology_only_sql(conn, alias="a")
+
     if sc == "SECTOR":
         scol = _assets_sector_col(conn)
         sec = _current_sector_safe()
         if not (scol and sec):
-            # pokušaj MY fallback pre nego što ubijemo sve
             if _my_possible(conn):
                 sc = "MY"
             else:
@@ -620,16 +680,10 @@ def _sql_scope_predicate(conn: sqlite3.Connection) -> Tuple[str, List[Any]]:
 
         if sc == "SECTOR":
             base = f"LOWER(TRIM(COALESCE(a.{scol},''))) = LOWER(TRIM(?))"
-            params: List[Any] = [sec]
+            if metro_only:
+                base = f"({base}) AND {metro_only}"
+            return base, [sec]
 
-            if _is_referent_metro():
-                mcol = _assets_is_metro_col(conn)
-                if mcol:
-                    base = f"({base}) AND COALESCE(a.{mcol},0) = 1"
-
-            return base, params
-
-    # MY scope
     if not (_safe_can(PERM_ASSETS_MY_VIEW) or _safe_can("assets.view")):
         return "0=1", []
 
@@ -648,11 +702,8 @@ def _sql_scope_predicate(conn: sqlite3.Connection) -> Tuple[str, List[Any]]:
         params2.append(c)
 
     where = "(" + " OR ".join(ors) + ")"
-
-    if _is_referent_metro():
-        mcol2 = _assets_is_metro_col(conn)
-        if mcol2:
-            where = f"({where}) AND COALESCE(a.{mcol2},0)=1"
+    if metro_only:
+        where = f"({where}) AND {metro_only}"
 
     return where, params2
 
@@ -660,11 +711,14 @@ def _sql_scope_predicate(conn: sqlite3.Connection) -> Tuple[str, List[Any]]:
 def _must_read_scope(conn: sqlite3.Connection, asset_uid: str) -> None:
     """
     Read scope: proverava da li je asset_uid u dozvoljenom scope-u.
-    SQL-first (JOIN logika identična list funkciji).
+    PLUS: enforce metrology flag (ako postoji kolona).
     """
     _must(PERM_METRO_VIEW)
 
     if _resolved_scope(conn) == "ALL" or _can_manage():
+        chk = _asset_is_metrology_flag(conn, asset_uid)
+        if chk is False:
+            raise PermissionError("Metrologija: sredstvo nije označeno kao metrologija (is_metrology=0).")
         return
 
     au = (asset_uid or "").strip()
@@ -685,8 +739,6 @@ def _must_read_scope(conn: sqlite3.Connection, asset_uid: str) -> None:
 
 def _must_write_scope(conn: sqlite3.Connection, asset_uid: str) -> None:
     _must(PERM_METRO_EDIT)
-    if _resolved_scope(conn) == "ALL" or _can_manage():
-        return
     _must_read_scope(conn, asset_uid)
 
 # (FILENAME: services/metrology_service.py - END PART 2/3)
@@ -765,13 +817,12 @@ def get_metrology_record(met_uid: str, warn_days: int = 30) -> Optional[Dict[str
     if not mu:
         return None
 
-    with connect_db() as conn:
+    with _conn_ctx() as conn:
         row = conn.execute("SELECT * FROM metrology_records WHERE met_uid=? LIMIT 1;", (mu,)).fetchone()
         if not row:
             return None
 
         rec = _row_to_dict(row, cols_hint=_MET_COLS)
-
         if int(rec.get("is_deleted") or 0) == 1:
             return None
 
@@ -779,9 +830,12 @@ def get_metrology_record(met_uid: str, warn_days: int = 30) -> Optional[Dict[str
         if not au:
             return None
 
-        _must_read_scope(conn, au)
+        try:
+            _must_read_scope(conn, au)
+        except PermissionError:
+            return None
 
-        rec["status"] = status_for_valid_until(rec.get("valid_until", ""), warn_days=warn_days)
+        rec["status"] = status_for_record(rec.get("calib_date", ""), rec.get("valid_until", ""), warn_days=warn_days)
         return rec
 
 
@@ -791,6 +845,10 @@ def list_metrology_records(
     warn_days: int = 30,
     include_deleted: bool = False,
 ) -> List[Dict[str, Any]]:
+    """
+    Scope enforce u servisu (ALL/SECTOR/MY).
+    DODATO: prikaz samo assets gde je is_metrology=1 (ako kolona postoji).
+    """
     ensure_metrology_schema()
     _require_login("metrology.list_metrology_records")
     _must(PERM_METRO_VIEW)
@@ -798,56 +856,78 @@ def list_metrology_records(
     qq = (q or "").strip()
     lim = _clamp_limit(limit, 5000, _MAX_LIST_LIMIT)
 
-    with connect_db() as conn:
+    with _conn_ctx() as conn:
         sc = _resolved_scope(conn)
 
-        # ALL (ili manage): direktno metrology_records (orphan-safe)
+        # ALL (ili manage): može orphan-scan, ali ako flag postoji, orphans otpadaju (ne možemo dokazati flag)
         if sc == "ALL" or _can_manage():
-            where = []
+            assets_exist = _table_exists(conn, "assets")
+            mcol = _assets_is_metro_col(conn) if assets_exist else ""
+            use_flag_filter = bool(assets_exist and mcol)
+
+            where: List[str] = []
             params: List[Any] = []
 
             if not include_deleted:
-                where.append("is_deleted=0")
+                where.append("mr.is_deleted=0" if assets_exist else "is_deleted=0")
 
             if qq:
                 like = f"%{qq}%"
-                where.append(
-                    "("
-                    "met_uid LIKE ? OR asset_uid LIKE ? OR calib_type LIKE ? OR provider_name LIKE ? "
-                    "OR cert_no LIKE ? OR notes LIKE ?"
-                    ")"
-                )
+                if assets_exist:
+                    where.append(
+                        "("
+                        "mr.met_uid LIKE ? OR mr.asset_uid LIKE ? OR mr.calib_type LIKE ? OR mr.provider_name LIKE ? "
+                        "OR mr.cert_no LIKE ? OR mr.notes LIKE ?"
+                        ")"
+                    )
+                else:
+                    where.append(
+                        "("
+                        "met_uid LIKE ? OR asset_uid LIKE ? OR calib_type LIKE ? OR provider_name LIKE ? "
+                        "OR cert_no LIKE ? OR notes LIKE ?"
+                        ")"
+                    )
                 params.extend([like, like, like, like, like, like])
 
-            sql = "SELECT * FROM metrology_records"
-            if where:
-                sql += " WHERE " + " AND ".join(where)
-            sql += " ORDER BY updated_at DESC LIMIT ?;"
+            if assets_exist:
+                # LEFT JOIN da zadržimo is_orphan signal (a_uid NULL)
+                sql = "SELECT mr.*, a.asset_uid AS _a_uid FROM metrology_records mr LEFT JOIN assets a ON a.asset_uid = mr.asset_uid"
+                if use_flag_filter:
+                    where.append(f"COALESCE(a.{mcol},0)=1")
+                if where:
+                    sql += " WHERE " + " AND ".join(where)
+                sql += " ORDER BY mr.updated_at DESC LIMIT ?;"
+                rows = conn.execute(sql, tuple(params + [lim])).fetchall()
+            else:
+                sql = "SELECT * FROM metrology_records"
+                if where:
+                    sql += " WHERE " + " AND ".join(where)
+                sql += " ORDER BY updated_at DESC LIMIT ?;"
+                rows = conn.execute(sql, tuple(params + [lim])).fetchall()
 
-            rows = conn.execute(sql, tuple(params + [lim])).fetchall()
             out: List[Dict[str, Any]] = []
-
-            assets_exist = _table_exists(conn, "assets")
             for row in rows:
                 rec = _row_to_dict(row, cols_hint=_MET_COLS)
                 if (not include_deleted) and int(rec.get("is_deleted") or 0) == 1:
                     continue
-                rec["status"] = status_for_valid_until(rec.get("valid_until", ""), warn_days=warn_days)
 
-                # signal za UI (orphan)
-                rec["is_orphan"] = 0
+                rec["status"] = status_for_record(rec.get("calib_date", ""), rec.get("valid_until", ""), warn_days=warn_days)
+
+                # Orphan signal samo kada smo radili LEFT JOIN i flag nije enforce-ovan (ili nije postojao)
+                is_orphan = 0
                 if assets_exist:
                     try:
-                        au = str(rec.get("asset_uid") or "").strip()
-                        if au:
-                            ok = conn.execute(
-                                "SELECT 1 FROM assets WHERE asset_uid=? LIMIT 1;",
-                                (au,),
-                            ).fetchone()
-                            if not ok:
-                                rec["is_orphan"] = 1
+                        a_uid = rec.get("_a_uid")
+                        is_orphan = 1 if (a_uid is None or str(a_uid).strip() == "") else 0
+                    except Exception:
+                        is_orphan = 0
+                    # ukloni internu kolonu da UI ne “pokupi” slučajno
+                    try:
+                        rec.pop("_a_uid", None)
                     except Exception:
                         pass
+                rec["is_orphan"] = is_orphan
+
                 out.append(rec)
 
             return out
@@ -860,7 +940,7 @@ def list_metrology_records(
         if where_scope == "0=1":
             return []
 
-        where = []
+        where: List[str] = []
         params2: List[Any] = []
 
         if not include_deleted:
@@ -882,7 +962,7 @@ def list_metrology_records(
             JOIN assets a ON a.asset_uid = mr.asset_uid
         """
 
-        where_all = []
+        where_all: List[str] = []
         if where:
             where_all.append("(" + " AND ".join(where) + ")")
         where_all.append(f"({where_scope})")
@@ -897,7 +977,7 @@ def list_metrology_records(
             rec = _row_to_dict(row, cols_hint=_MET_COLS)
             if (not include_deleted) and int(rec.get("is_deleted") or 0) == 1:
                 continue
-            rec["status"] = status_for_valid_until(rec.get("valid_until", ""), warn_days=warn_days)
+            rec["status"] = status_for_record(rec.get("calib_date", ""), rec.get("valid_until", ""), warn_days=warn_days)
             rec["is_orphan"] = 0
             out2.append(rec)
 
@@ -910,6 +990,10 @@ def list_metrology_records_my(
     warn_days: int = 30,
     include_deleted: bool = False,
 ) -> List[Dict[str, Any]]:
+    """
+    MY API: metrology samo za sredstva koja korisnik trenutno duži.
+    DODATO: + samo ona koja imaju is_metrology=1 (ako kolona postoji).
+    """
     ensure_metrology_schema()
     _require_login("metrology.list_metrology_records_my")
     _must(PERM_METRO_VIEW)
@@ -922,24 +1006,36 @@ def list_metrology_records_my(
     if not my_uids:
         return []
 
-    with connect_db() as conn:
+    with _conn_ctx() as conn:
         if not _table_exists(conn, "metrology_records"):
             return []
 
-        where = []
+        assets_exist = _table_exists(conn, "assets")
+        mcol = _assets_is_metro_col(conn) if assets_exist else ""
+        use_flag_filter = bool(assets_exist and mcol)
+
+        where: List[str] = []
         params: List[Any] = []
 
         if not include_deleted:
-            where.append("is_deleted=0")
+            where.append("mr.is_deleted=0" if use_flag_filter else "is_deleted=0")
 
         if qq:
             like = f"%{qq}%"
-            where.append(
-                "("
-                "met_uid LIKE ? OR asset_uid LIKE ? OR calib_type LIKE ? OR provider_name LIKE ? "
-                "OR cert_no LIKE ? OR notes LIKE ?"
-                ")"
-            )
+            if use_flag_filter:
+                where.append(
+                    "("
+                    "mr.met_uid LIKE ? OR mr.asset_uid LIKE ? OR mr.calib_type LIKE ? OR mr.provider_name LIKE ? "
+                    "OR mr.cert_no LIKE ? OR mr.notes LIKE ?"
+                    ")"
+                )
+            else:
+                where.append(
+                    "("
+                    "met_uid LIKE ? OR asset_uid LIKE ? OR calib_type LIKE ? OR provider_name LIKE ? "
+                    "OR cert_no LIKE ? OR notes LIKE ?"
+                    ")"
+                )
             params.extend([like, like, like, like, like, like])
 
         try:
@@ -950,12 +1046,20 @@ def list_metrology_records_my(
                 [(u,) for u in my_uids],
             )
 
-            where.append("asset_uid IN (SELECT uid FROM tmp_my_assets)")
+            if use_flag_filter:
+                where.append("mr.asset_uid IN (SELECT uid FROM tmp_my_assets)")
+                where.append(f"COALESCE(a.{mcol},0)=1")
 
-            sql = "SELECT * FROM metrology_records"
-            if where:
-                sql += " WHERE " + " AND ".join(where)
-            sql += " ORDER BY updated_at DESC LIMIT ?;"
+                sql = "SELECT mr.* FROM metrology_records mr JOIN assets a ON a.asset_uid = mr.asset_uid"
+                if where:
+                    sql += " WHERE " + " AND ".join(where)
+                sql += " ORDER BY mr.updated_at DESC LIMIT ?;"
+            else:
+                where.append("asset_uid IN (SELECT uid FROM tmp_my_assets)")
+                sql = "SELECT * FROM metrology_records"
+                if where:
+                    sql += " WHERE " + " AND ".join(where)
+                sql += " ORDER BY updated_at DESC LIMIT ?;"
 
             rows = conn.execute(sql, tuple(params + [lim])).fetchall()
         except Exception:
@@ -966,7 +1070,7 @@ def list_metrology_records_my(
             rec = _row_to_dict(row, cols_hint=_MET_COLS)
             if (not include_deleted) and int(rec.get("is_deleted") or 0) == 1:
                 continue
-            rec["status"] = status_for_valid_until(rec.get("valid_until", ""), warn_days=warn_days)
+            rec["status"] = status_for_record(rec.get("calib_date", ""), rec.get("valid_until", ""), warn_days=warn_days)
             rec["is_orphan"] = 0
             out.append(rec)
 
@@ -983,6 +1087,10 @@ def list_metrology_records_for_asset(
     warn_days: int = 30,
     include_deleted: bool = False,
 ) -> List[Dict[str, Any]]:
+    """
+    Vraća metrology zapise za konkretan asset_uid.
+    DODATO: ako možemo proveriti is_metrology i flag je 0 -> [] (fail-closed).
+    """
     ensure_metrology_schema()
     _require_login("metrology.list_metrology_records_for_asset")
     _must(PERM_METRO_VIEW)
@@ -993,10 +1101,15 @@ def list_metrology_records_for_asset(
 
     lim = _clamp_limit(limit, 200, _MAX_AUDIT_LIMIT)
 
-    with connect_db() as conn:
-        # ALL/manage: može bez assets; ostali moraju scope check (fail-closed)
-        if _resolved_scope(conn) != "ALL" and (not _can_manage()):
+    with _conn_ctx() as conn:
+        try:
             _must_read_scope(conn, au)
+        except PermissionError:
+            return []
+
+        chk = _asset_is_metrology_flag(conn, au)
+        if chk is False:
+            return []
 
         where = "asset_uid=?"
         params: List[Any] = [au]
@@ -1018,7 +1131,7 @@ def list_metrology_records_for_asset(
             rec = _row_to_dict(row, cols_hint=_MET_COLS)
             if (not include_deleted) and int(rec.get("is_deleted") or 0) == 1:
                 continue
-            rec["status"] = status_for_valid_until(rec.get("valid_until", ""), warn_days=warn_days)
+            rec["status"] = status_for_record(rec.get("calib_date", ""), rec.get("valid_until", ""), warn_days=warn_days)
             rec["is_orphan"] = 0
             out.append(rec)
         return out
@@ -1040,7 +1153,7 @@ def list_metrology_audit(met_uid: str, limit: int = 200) -> List[Dict[str, Any]]
 
     lim = _clamp_limit(limit, 200, _MAX_AUDIT_LIMIT)
 
-    with connect_db() as conn:
+    with _conn_ctx() as conn:
         row = conn.execute("SELECT asset_uid FROM metrology_records WHERE met_uid=? LIMIT 1;", (mu,)).fetchone()
         if not row:
             return []
@@ -1048,8 +1161,10 @@ def list_metrology_audit(met_uid: str, limit: int = 200) -> List[Dict[str, Any]]
         if not asset_uid:
             return []
 
-        if _resolved_scope(conn) != "ALL" and (not _can_manage()):
+        try:
             _must_read_scope(conn, asset_uid)
+        except PermissionError:
+            return []
 
         rows = conn.execute(
             """
@@ -1116,8 +1231,12 @@ def create_metrology_record(
         "is_deleted": 0,
     }
 
-    with connect_db() as conn:
+    with _conn_ctx() as conn:
         _must_write_scope(conn, au)
+
+        chk = _asset_is_metrology_flag(conn, au)
+        if chk is False:
+            raise ValueError("Ne može metrologija: sredstvo nije označeno kao metrologija (is_metrology=0).")
 
         try:
             conn.execute(
@@ -1141,7 +1260,10 @@ def create_metrology_record(
                 ),
             )
             _audit(conn, actor_eff, "INSERT", met_uid, au, before_obj=None, after_obj=rec, note=note_audit)
-            conn.commit()
+            try:
+                conn.commit()
+            except Exception:
+                pass
         except sqlite3.IntegrityError as e:
             raise ValueError(f"Greška pri upisu metrologije (integritet): {e}")
         except sqlite3.Error as e:
@@ -1172,7 +1294,7 @@ def update_metrology_record(
     ct = _validate_calib_type(calib_type)
     now = _now_str()
 
-    with connect_db() as conn:
+    with _conn_ctx() as conn:
         before_row = conn.execute("SELECT * FROM metrology_records WHERE met_uid=? LIMIT 1;", (mu,)).fetchone()
         if not before_row:
             return False
@@ -1186,6 +1308,10 @@ def update_metrology_record(
             return False
 
         _must_write_scope(conn, au)
+
+        chk = _asset_is_metrology_flag(conn, au)
+        if chk is False:
+            raise ValueError("Ne može izmena: sredstvo nije označeno kao metrologija (is_metrology=0).")
 
         try:
             conn.execute(
@@ -1211,7 +1337,10 @@ def update_metrology_record(
             after_row = conn.execute("SELECT * FROM metrology_records WHERE met_uid=? LIMIT 1;", (mu,)).fetchone()
             after = _row_to_dict(after_row, cols_hint=_MET_COLS) if after_row else {}
             _audit(conn, actor_eff, "UPDATE", mu, au, before_obj=before, after_obj=after, note=note_audit)
-            conn.commit()
+            try:
+                conn.commit()
+            except Exception:
+                pass
         except sqlite3.Error as e:
             raise RuntimeError(f"DB greška pri izmeni metrologije: {e}")
 
@@ -1232,7 +1361,7 @@ def delete_metrology_record(
 
     actor_eff = _actor_name_for_audit()
 
-    with connect_db() as conn:
+    with _conn_ctx() as conn:
         before_row = conn.execute("SELECT * FROM metrology_records WHERE met_uid=? LIMIT 1;", (mu,)).fetchone()
         if not before_row:
             return False
@@ -1247,6 +1376,10 @@ def delete_metrology_record(
 
         _must_write_scope(conn, au)
 
+        chk = _asset_is_metrology_flag(conn, au)
+        if chk is False:
+            raise ValueError("Ne može brisanje: sredstvo nije označeno kao metrologija (is_metrology=0).")
+
         try:
             conn.execute(
                 "UPDATE metrology_records SET is_deleted=1, updated_at=? WHERE met_uid=?;",
@@ -1256,7 +1389,10 @@ def delete_metrology_record(
             after_row = conn.execute("SELECT * FROM metrology_records WHERE met_uid=? LIMIT 1;", (mu,)).fetchone()
             after = _row_to_dict(after_row, cols_hint=_MET_COLS) if after_row else {}
             _audit(conn, actor_eff, "DELETE", mu, au, before_obj=before, after_obj=after, note=note_audit)
-            conn.commit()
+            try:
+                conn.commit()
+            except Exception:
+                pass
         except sqlite3.Error as e:
             raise RuntimeError(f"DB greška pri brisanju metrologije: {e}")
 
@@ -1266,6 +1402,7 @@ def delete_metrology_record(
 __all__ = [
     "ensure_metrology_schema",
     "status_for_valid_until",
+    "status_for_record",
     "get_metrology_record",
     "list_metrology_records",
     "list_metrology_records_my",
@@ -1278,5 +1415,4 @@ __all__ = [
     "update_metrology_record",
     "delete_metrology_record",
 ]
-
 # (FILENAME: services/metrology_service.py - END PART 3/3)

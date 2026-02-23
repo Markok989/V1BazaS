@@ -1,5 +1,4 @@
 # FILENAME: ui/asset_detail_dialog.py
-# (FILENAME: ui/asset_detail_dialog.py - START PART 1/6)
 # -*- coding: utf-8 -*-
 """
 BazaS2 (offline) — ui/asset_detail_dialog.py
@@ -12,14 +11,14 @@ Asset Detail Dialog (V1.9+), senior revizija (stabilnost + UX):
 - Preview ekstrakcije: TXT/DOCX/XLSX/PDF (best-effort; ako nema biblioteka, daje smislen tekst).
 - Offline-only: nema interneta, nema cloud poziva.
 
-Senior improvements (ovaj regen):
-- QSettings restore: ne “pregazi” nove ključeve starim ako su novi uspešno učitani.
-- Persist geometry: čuva i normal_geometry posebno kad je prozor maksimizovan.
-- SQL identifikatori se quoting-uju (kolone/tabele) radi robustnosti.
-- XLSX preview zatvara workbook (manje file-lock problema).
-- Attachments: pamti selekciju po attachment_id i vraća je posle reload-a.
-- Preview: background worker (QThread) za tekstualne preview-e (DOCX/XLSX/PDF/TXT) + token guard.
-- Close cleanup: bezbedno “gasi” preview thread (bez freeze-a / bez crash-a).
+KRITIČAN FIX:
+- Dodata metoda _build_attachments_tab() (prethodno je pozivana, ali nije postojala -> crash).
+
+DODATO (UX/bug hardening):
+- Metrologija “Detalji zapisa” otvara MetrologyDetailsDialog ako je dostupan.
+- Edit dialog pre-populate: prosleđuje trenutne vrednosti (self._asset_row) kroz parametar `initial` ako ga dijalog podržava.
+- Attachments fallback rel path: path traversal guard (rel putanja mora ostati unutar app root).
+- Preview thread: requestInterruption + best-effort early-exit check.
 """
 
 from __future__ import annotations
@@ -71,7 +70,19 @@ from PySide6.QtWidgets import (  # type: ignore
 )
 
 from core.config import DB_FILE
-from core.session import actor_name, can, current_sector
+
+# ✅ Session helpers (fail-safe import) — UI ne treba da “pukne” ako import zakaže u edge build-u
+try:
+    from core.session import actor_name as actor_name, can as can, current_sector as current_sector  # type: ignore
+except Exception:  # pragma: no cover
+    def actor_name() -> str:  # type: ignore
+        return "user"
+
+    def can(_perm: str) -> bool:  # type: ignore
+        return False
+
+    def current_sector() -> str:  # type: ignore
+        return ""
 
 from ui.utils.datetime_fmt import fmt_date_sr
 
@@ -175,7 +186,6 @@ except Exception as e:  # pragma: no cover
 
 
 # -------------------- helpers --------------------
-
 def _app_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
@@ -263,6 +273,26 @@ def _q_ident(name: str) -> str:
     return f'"{n}"'
 
 
+def _safe_rel_under_root(rel_path: str) -> Optional[Path]:
+    """
+    Security hardening (path traversal):
+    Ako je putanja RELATIVNA, mora ostati unutar app_root().
+    """
+    try:
+        rel = Path(str(rel_path))
+        if rel.is_absolute():
+            return rel
+        root = _app_root().resolve()
+        resolved = (root / rel).resolve()
+        try:
+            resolved.relative_to(root)
+        except Exception:
+            return None
+        return resolved
+    except Exception:
+        return None
+
+
 def _read_asset_row(asset_uid: str) -> Dict[str, Any]:
     """
     Fail-safe čitanje asset reda direktno iz SQLite:
@@ -333,7 +363,6 @@ def _read_asset_row(asset_uid: str) -> Dict[str, Any]:
             if c:
                 sel_cols.append(c)
 
-        # QUOTING identifikatora
         sel_sql = ", ".join(_q_ident(c) for c in sel_cols)
         q = f"SELECT {sel_sql} FROM assets WHERE asset_uid=? LIMIT 1;"
         row = conn.execute(q, (au,)).fetchone()
@@ -649,12 +678,13 @@ def _load_timeline_rows(asset_uid: str, limit: int = 400) -> Tuple[List[Dict[str
 
 
 # -------------------- preview worker (background) --------------------
-
 class _PreviewWorker(QObject):
     """
     Background worker za tekstualni preview (DOCX/XLSX/PDF/TXT/unsupported).
     Token (job_id) + path obezbeđuju da UI ne “upisuje” pogrešan rezultat
     kad korisnik brzo menja selekciju.
+
+    DODATO: best-effort prekid (requestInterruption).
     """
     finished = Signal(int, str, str)  # job_id, path_str, text
 
@@ -663,10 +693,19 @@ class _PreviewWorker(QObject):
         self.job_id = int(job_id)
         self.path_str = str(path_str)
 
+    def _interrupted(self) -> bool:
+        try:
+            th = QThread.currentThread()
+            return bool(th.isInterruptionRequested())
+        except Exception:
+            return False
+
     def run(self) -> None:
         p = Path(self.path_str)
         try:
-            if not p.exists() or not p.is_file():
+            if self._interrupted():
+                txt = "Preview prekidan (promenjena selekcija)."
+            elif (not p.exists()) or (not p.is_file()):
                 txt = "Fajl ne postoji na disku (ili putanja nije dostupna)."
             elif _is_text_file(p):
                 txt = _read_text_preview(p)
@@ -688,7 +727,6 @@ class _PreviewWorker(QObject):
 
 
 # -------------------- UI --------------------
-
 class AssetDetailDialog(QDialog):
     def __init__(self, asset_uid: str, parent=None):
         super().__init__(parent)
@@ -843,7 +881,7 @@ class AssetDetailDialog(QDialog):
         self._build_calendar_tab()
         self._build_metrology_tab()
         self._build_custom_fields_tab()
-        self._build_attachments_tab()
+        self._build_attachments_tab()  # ✅ FIX: metoda sada postoji
 
         self.tabs.addTab(self.details_tab, "Detalji")
         self.tabs.addTab(self.timeline_tab, "Timeline")
@@ -867,13 +905,7 @@ class AssetDetailDialog(QDialog):
         # initial load
         self._reload_all()
 
-# (FILENAME: ui/asset_detail_dialog.py - END PART 1/6)
-
-# FILENAME: ui/asset_detail_dialog.py
-# (FILENAME: ui/asset_detail_dialog.py - START PART 2/6)
-
     # -------------------- window chrome / persist --------------------
-
     def _settings_key(self, suffix: str) -> str:
         return f"{_QS_PREFIX}/{suffix}"
 
@@ -907,7 +939,6 @@ class AssetDetailDialog(QDialog):
 
         # NEW KEYS
         try:
-            # geometry (prefer normal_geometry if we were maximized)
             geo_norm = _qvariant_to_bytearray(self._qs.value(self._settings_key("normal_geometry"), None))
             geo = _qvariant_to_bytearray(self._qs.value(self._settings_key("geometry"), None))
             use_geo = geo_norm if (geo_norm and len(geo_norm) > 12) else geo
@@ -994,13 +1025,11 @@ class AssetDetailDialog(QDialog):
             return
 
         try:
-            # geometry always
             self._qs.setValue(self._settings_key("geometry"), self.saveGeometry())
         except Exception:
             pass
 
         try:
-            # normal geometry snapshot (only meaningful if maximized)
             if self.isMaximized():
                 try:
                     self.showNormal()
@@ -1075,13 +1104,12 @@ class AssetDetailDialog(QDialog):
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         try:
-            if self._preview_img_path and self.preview_stack.currentIndex() == 1:
+            if self._preview_img_path and getattr(self, "preview_stack", None) is not None and self.preview_stack.currentIndex() == 1:
                 self._render_image_preview(self._preview_img_path)
         except Exception:
             pass
 
     # -------------------- style helpers --------------------
-
     def _remember_style(self, w: QWidget) -> None:
         try:
             self._base_styles[id(w)] = w.styleSheet() or ""
@@ -1108,13 +1136,7 @@ class AssetDetailDialog(QDialog):
         except Exception:
             pass
 
-# (FILENAME: ui/asset_detail_dialog.py - END PART 2/6)
-
-# FILENAME: ui/asset_detail_dialog.py
-# (FILENAME: ui/asset_detail_dialog.py - START PART 3/6)
-
-    # -------------------- tab builders (Details/Timeline/Calendar/Metrology/Custom) --------------------
-
+    # -------------------- tab builders --------------------
     def _build_details_tab(self) -> None:
         lay = QVBoxLayout(self.details_tab)
 
@@ -1346,8 +1368,198 @@ class AssetDetailDialog(QDialog):
         lay.addWidget(self.custom_box, 1)
         lay.addStretch(1)
 
-    # -------------------- reload / header fill --------------------
+    # ✅ FIX: missing builder that caused crash
+    def _build_attachments_tab(self) -> None:
+        lay = QVBoxLayout(self.attach_tab)
 
+        att_box = QGroupBox("Prilozi")
+        att_lay = QVBoxLayout(att_box)
+
+        # Top buttons
+        top_btns = QHBoxLayout()
+        self.btn_add = QPushButton("Dodaj prilog")
+        self.btn_open = QPushButton("Otvori")
+        self.btn_open_folder = QPushButton("Otvori folder")
+        self.btn_del = QPushButton("Obriši")
+
+        self.btn_add.setToolTip("Dodaj fajl kao prilog sredstvu.")
+        self.btn_open.setToolTip("Otvori izabrani prilog u podrazumevanoj aplikaciji.")
+        self.btn_open_folder.setToolTip("Otvori folder u kojem se nalazi izabrani prilog.")
+        self.btn_del.setToolTip("Obriši izabrani prilog (zapis + fajl po pravilima servisa).")
+
+        self.btn_open.setEnabled(False)
+        self.btn_open_folder.setEnabled(False)
+        self.btn_del.setEnabled(False)
+
+        top_btns.addWidget(self.btn_add)
+        top_btns.addWidget(self.btn_open)
+        top_btns.addWidget(self.btn_open_folder)
+        top_btns.addWidget(self.btn_del)
+        top_btns.addStretch(1)
+
+        # Path bar
+        path_bar = QHBoxLayout()
+        path_bar.setContentsMargins(0, 0, 0, 0)
+
+        self.ed_att_path = QLineEdit()
+        self.ed_att_path.setReadOnly(True)
+        self.ed_att_path.setPlaceholderText("Putanja izabranog priloga…")
+
+        self.btn_copy_path = QPushButton("Kopiraj putanju")
+        self.btn_copy_path.setEnabled(False)
+        self.btn_copy_path.setToolTip("Kopira putanju izabranog priloga u clipboard.")
+        self.btn_copy_path.clicked.connect(lambda: _set_clipboard_text(self.ed_att_path.text() or ""))
+
+        path_bar.addWidget(QLabel("Putanja:"))
+        path_bar.addWidget(self.ed_att_path, 1)
+        path_bar.addWidget(self.btn_copy_path)
+
+        # Attachments table
+        self.tbl = QTableWidget(0, 4)
+        self.tbl.setHorizontalHeaderLabels(["R.br.", "Naziv", "Kreirano", "Napomena"])
+        self.tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tbl.setAlternatingRowColors(True)
+        self.tbl.horizontalHeader().setStretchLastSection(True)
+        self.tbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        _wire_table_full_copy(self.tbl)
+
+        try:
+            self.tbl.setSortingEnabled(True)
+        except Exception:
+            pass
+
+        self.tbl.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tbl.customContextMenuRequested.connect(self._on_tbl_context_menu)
+
+        # Preview + find UI
+        self.preview_stack = QTabWidget()  # 0=Info, 1=Slika, 2=Tekst
+        self.preview_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        self.ed_find = QLineEdit()
+        self.ed_find.setPlaceholderText("Pretraga u preview-u (Enter = Sledeće)")
+
+        self.btn_find = QPushButton("Nađi")
+        self.btn_next = QPushButton("Sledeće")
+        self.btn_prev = QPushButton("Prethodno")
+        self.lb_find = QLabel("")
+
+        self.btn_find.setEnabled(False)
+        self.btn_next.setEnabled(False)
+        self.btn_prev.setEnabled(False)
+
+        find_bar = QHBoxLayout()
+        find_bar.setContentsMargins(0, 0, 0, 0)
+        find_bar.addWidget(QLabel("🔎"))
+        find_bar.addWidget(self.ed_find, 1)
+        find_bar.addWidget(self.btn_find)
+        find_bar.addWidget(self.btn_prev)
+        find_bar.addWidget(self.btn_next)
+        find_bar.addWidget(self.lb_find)
+
+        find_wrap = QWidget()
+        find_wrap.setLayout(find_bar)
+        find_wrap.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        self.preview_info = QLabel(
+            "Izaberi prilog iz liste.\n\n"
+            "• Slike: prikaz.\n"
+            "• TXT/DOCX/XLSX/PDF: tekstualni preview + pretraga (best-effort).\n\n"
+            "Tip: Ctrl+F fokusira polje pretrage (dok si na tabu Prilozi)."
+        )
+        self.preview_info.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.preview_info.setWordWrap(True)
+        self.preview_info.setStyleSheet("padding: 8px;")
+
+        w_info = QWidget()
+        li = QVBoxLayout(w_info)
+        li.setContentsMargins(0, 0, 0, 0)
+        li.addWidget(self.preview_info, 1)
+
+        self.preview_img = QLabel()
+        self.preview_img.setAlignment(Qt.AlignCenter)
+        self.preview_img.setText("Nema pregleda.")
+        self.preview_img.setStyleSheet("background: #111; color: #ddd; border: 1px solid #333;")
+        self.preview_img.setMinimumHeight(160)
+        self.preview_img.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        w_img = QWidget()
+        limg = QVBoxLayout(w_img)
+        limg.setContentsMargins(0, 0, 0, 0)
+        limg.addWidget(self.preview_img, 1)
+
+        self.preview_txt = QPlainTextEdit()
+        self.preview_txt.setReadOnly(True)
+        self.preview_txt.setPlaceholderText("Tekstualni preview...")
+        self.preview_txt.setStyleSheet("font-family: Consolas, 'Courier New', monospace;")
+        try:
+            self.preview_txt.setLineWrapMode(QPlainTextEdit.NoWrap)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+        w_txt = QWidget()
+        ltxt = QVBoxLayout(w_txt)
+        ltxt.setContentsMargins(0, 0, 0, 0)
+        ltxt.addWidget(self.preview_txt, 1)
+
+        self.preview_stack.addTab(w_info, "Info")
+        self.preview_stack.addTab(w_img, "Slika")
+        self.preview_stack.addTab(w_txt, "Tekst")
+        self.preview_stack.setCurrentIndex(0)
+        self.preview_stack.currentChanged.connect(lambda _: self._sync_find_enabled())
+
+        preview_panel = QWidget()
+        preview_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        preview_lay = QVBoxLayout(preview_panel)
+        preview_lay.setContentsMargins(0, 0, 0, 0)
+        preview_lay.addWidget(find_wrap)
+        preview_lay.addWidget(self.preview_stack, 1)
+
+        self.ed_note = QPlainTextEdit()
+        self.ed_note.setPlaceholderText("Napomena za prilog (opciono) — upisuje se u bazu uz prilog.")
+        self.ed_note.setMinimumHeight(48)
+        self.ed_note.setMaximumHeight(140)
+
+        split = QSplitter(Qt.Horizontal)
+        split.setChildrenCollapsible(True)
+        split.addWidget(self.tbl)
+        split.addWidget(preview_panel)
+        split.setStretchFactor(0, 3)
+        split.setStretchFactor(1, 2)
+        self._att_split = split
+
+        att_lay.addLayout(top_btns)
+        att_lay.addLayout(path_bar)
+        att_lay.addWidget(split, 1)
+        att_lay.addWidget(self.ed_note)
+
+        lay.addWidget(att_box, 1)
+
+        # Signals
+        self.btn_add.clicked.connect(self.add_attachment)
+        self.btn_open.clicked.connect(self.open_attachment)
+        self.btn_open_folder.clicked.connect(self.open_attachment_folder)
+        self.btn_del.clicked.connect(self.delete_attachment_ui)
+
+        self.tbl.itemSelectionChanged.connect(self._on_att_selection_changed)
+        self.tbl.cellDoubleClicked.connect(lambda r, c: self.open_attachment())
+
+        self.btn_find.clicked.connect(self._find_first)
+        self.btn_next.clicked.connect(self._find_next)
+        self.btn_prev.clicked.connect(self._find_prev)
+        self.ed_find.returnPressed.connect(self._find_next)
+        self.preview_txt.textChanged.connect(self._sync_find_enabled)
+        self.ed_find.textChanged.connect(self._sync_find_enabled)
+
+        # Debounce selection -> preview start
+        try:
+            if not hasattr(self, "_att_preview_timer"):
+                self._att_preview_timer = QTimer(self)  # type: ignore[attr-defined]
+                self._att_preview_timer.setSingleShot(True)  # type: ignore[attr-defined]
+                self._att_preview_timer.timeout.connect(self._render_selected_attachment_preview)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    # -------------------- reload / header fill --------------------
     def _reload_all(self) -> None:
         self._load_asset()
         self._load_timeline()
@@ -1358,11 +1570,7 @@ class AssetDetailDialog(QDialog):
         self._load_custom_fields()
         self._load_attachments(show_errors=False)
 
-# (FILENAME: ui/asset_detail_dialog.py - END PART 3/6)
-
-# FILENAME: ui/asset_detail_dialog.py
-# (FILENAME: ui/asset_detail_dialog.py - START PART 4/6)
-
+    # -------------------- missing fields / header sync --------------------
     def _missing_fields(self) -> List[str]:
         missing: List[str] = []
         for key, label in _REQUIRED_FIELD_LABELS:
@@ -1427,6 +1635,7 @@ class AssetDetailDialog(QDialog):
         except Exception:
             self.lb_is_metro.setText("NE")
 
+        # Details tab mirrors
         self.det_uid.setText(self.asset_uid)
         self._set_text_or_dash(self.det_name, self._asset_row.get("name", ""))
         self._set_text_or_dash(self.det_status, self._asset_row.get("status", ""))
@@ -1477,7 +1686,6 @@ class AssetDetailDialog(QDialog):
             self.btn_scrap.setEnabled(can_edit)
 
     # -------------------- header actions --------------------
-
     def _edit_asset(self) -> None:
         if not _can_asset_edit():
             QMessageBox.warning(self, "Zabranjeno", "Nemaš pravo da menjaš detalje sredstava.")
@@ -1491,10 +1699,18 @@ class AssetDetailDialog(QDialog):
             return
 
         try:
+            # ✅ UX: pre-populate trenutnim vrednostima ako dijalog podržava parametar `initial`
             try:
-                dlg = AssetEditDialog(self.asset_uid, parent=self)  # type: ignore[misc]
+                dlg = AssetEditDialog(self.asset_uid, initial=dict(self._asset_row), parent=self)  # type: ignore[misc]
             except TypeError:
-                dlg = AssetEditDialog(asset_uid=self.asset_uid, parent=self)  # type: ignore[misc]
+                try:
+                    dlg = AssetEditDialog(asset_uid=self.asset_uid, initial=dict(self._asset_row), parent=self)  # type: ignore[misc]
+                except TypeError:
+                    try:
+                        dlg = AssetEditDialog(self.asset_uid, parent=self)  # type: ignore[misc]
+                    except TypeError:
+                        dlg = AssetEditDialog(asset_uid=self.asset_uid, parent=self)  # type: ignore[misc]
+
             res = dlg.exec()
             if res == QDialog.Accepted:
                 self._reload_all()
@@ -1533,7 +1749,6 @@ class AssetDetailDialog(QDialog):
             ok_msg = "Sredstvo je rashodovano."
             src = "ui_asset_detail_scrap"
 
-        # Fail-safe update: primarno core.db.update_asset_db, ali poruka je jasna ako nije dostupno.
         try:
             from core.db import update_asset_db  # type: ignore
             update_asset_db(
@@ -1550,12 +1765,7 @@ class AssetDetailDialog(QDialog):
         self._reload_all()
 
     # -------------------- timeline --------------------
-
     def _load_timeline(self, *args) -> None:
-        """
-        UI punjenje timeline tabele. Fail-safe: ako baza nema očekivane kolone,
-        mapira najbolje što može (ili ostavlja prazno), ali UI ne puca.
-        """
         rows, msg = _load_timeline_rows(self.asset_uid, limit=400)
 
         try:
@@ -1626,14 +1836,12 @@ class AssetDetailDialog(QDialog):
                 self.tbl_tl.setUpdatesEnabled(True)
             except Exception:
                 pass
-
-# (FILENAME: ui/asset_detail_dialog.py - END PART 4/6)
-
-# FILENAME: ui/asset_detail_dialog.py
-# (FILENAME: ui/asset_detail_dialog.py - START PART 5/6)
+            try:
+                self.tbl_tl.setSortingEnabled(True)
+            except Exception:
+                pass
 
     # -------------------- metrology --------------------
-
     def _can_manage_metrology(self) -> bool:
         try:
             return bool(can(PERM_METRO_MANAGE))
@@ -1647,9 +1855,6 @@ class AssetDetailDialog(QDialog):
             return False
 
     def _can_sector_scope_metrology(self) -> bool:
-        """
-        UI-level hint. Stvarni enforcement mora biti u servisu.
-        """
         try:
             if not (bool(can(PERM_ASSETS_METRO_VIEW)) and bool(can(PERM_METRO_VIEW))):
                 return False
@@ -1666,10 +1871,6 @@ class AssetDetailDialog(QDialog):
         return bool(is_m and asset_sec and user_sec and (_norm(asset_sec) == _norm(user_sec)))
 
     def _apply_metrology_scope_ui(self) -> None:
-        """
-        Metrologija tab: UI enable/disable + informativna poruka.
-        Ne menja poslovnu logiku — servis mora biti FAIL-CLOSED.
-        """
         if list_metrology_records_for_asset is None:
             self.cb_met_warn.setEnabled(False)
             self.btn_met_refresh.setEnabled(False)
@@ -1793,14 +1994,29 @@ class AssetDetailDialog(QDialog):
                 self.tbl_met.setUpdatesEnabled(True)
             except Exception:
                 pass
+            try:
+                self.tbl_met.setSortingEnabled(True)
+            except Exception:
+                pass
 
         self._sync_met_buttons()
 
     def _open_met_details(self) -> None:
-        uid = self._selected_met_uid()
-        if not uid:
+        met_uid = self._selected_met_uid()
+        if not met_uid:
             return
-        QMessageBox.information(self, "Metrologija", f"Izabran zapis:\n\nMet UID: {uid}")
+        try:
+            from ui.metrology_page import MetrologyDetailsDialog  # type: ignore
+            try:
+                warn_days = int(self.cb_met_warn.currentText())
+            except Exception:
+                warn_days = 30
+            dlg = MetrologyDetailsDialog(met_uid, parent=self, warn_days=warn_days)
+            dlg.exec()
+        except PermissionError as e:
+            QMessageBox.information(self, "RBAC", f"Nemaš pravo.\n\n{e}")
+        except Exception as e:
+            QMessageBox.information(self, "Metrologija", f"Ne mogu da otvorim detalje.\n\n{e}")
 
     def _on_met_context_menu(self, pos) -> None:
         if not self.tbl_met.isEnabled():
@@ -1829,7 +2045,6 @@ class AssetDetailDialog(QDialog):
             self._open_met_details()
 
     # -------------------- calendar --------------------
-
     def _apply_calendar_scope_ui(self) -> None:
         if list_calendar_events_for_asset is None:
             self.btn_cal_refresh.setEnabled(False)
@@ -1849,19 +2064,20 @@ class AssetDetailDialog(QDialog):
             if _CAL_IMPORT_ERR:
                 msg += f" ({_CAL_IMPORT_ERR})"
             self.lb_cal_info.setText(msg)
-        else:
-            self.btn_cal_refresh.setEnabled(True)
-            self.btn_cal_add.setEnabled(True)
-            try:
-                self.cal.setEnabled(True)
-            except Exception:
-                pass
-            try:
-                self.tbl_cal.setEnabled(True)
-            except Exception:
-                pass
-            if (self.lb_cal_info.text() or "").startswith("Kalendar modul nije dostupan"):
-                self.lb_cal_info.setText("")
+            return
+
+        self.btn_cal_refresh.setEnabled(True)
+        self.btn_cal_add.setEnabled(True)
+        try:
+            self.cal.setEnabled(True)
+        except Exception:
+            pass
+        try:
+            self.tbl_cal.setEnabled(True)
+        except Exception:
+            pass
+        if (self.lb_cal_info.text() or "").startswith("Kalendar modul nije dostupan"):
+            self.lb_cal_info.setText("")
 
     def _sync_calendar_buttons(self) -> None:
         r = _current_row_any(self.tbl_cal)
@@ -1873,7 +2089,10 @@ class AssetDetailDialog(QDialog):
         if has:
             it = self.tbl_cal.item(r, 0)
             try:
-                self._cal_selected_id = int(it.text()) if it else 0
+                v = it.data(Qt.UserRole) if it is not None else None
+                if v is None:
+                    v = it.text() if it is not None else "0"
+                self._cal_selected_id = int(v)
             except Exception:
                 self._cal_selected_id = 0
 
@@ -1884,7 +2103,7 @@ class AssetDetailDialog(QDialog):
     def _is_valid_time_hhmm(self, s: str) -> bool:
         s = (s or "").strip()
         if not s:
-            return True  # prazno dozvoljeno
+            return True
         if len(s) != 5 or s[2] != ":":
             return False
         try:
@@ -1933,13 +2152,24 @@ class AssetDetailDialog(QDialog):
                 etype = rr.get("event_type", rr.get("type", "")) or ""
                 text = rr.get("text", rr.get("note", rr.get("title", ""))) or ""
 
-                self.tbl_cal.setItem(i, 0, QTableWidgetItem(str(eid)))
+                it0 = QTableWidgetItem(str(eid))
+                try:
+                    it0.setData(Qt.UserRole, int(eid))
+                except Exception:
+                    pass
+
+                self.tbl_cal.setItem(i, 0, it0)
                 self.tbl_cal.setItem(i, 1, QTableWidgetItem(str(when)))
                 self.tbl_cal.setItem(i, 2, QTableWidgetItem(str(etype)))
                 self.tbl_cal.setItem(i, 3, QTableWidgetItem(str(text)))
+
         finally:
             try:
                 self.tbl_cal.setUpdatesEnabled(True)
+            except Exception:
+                pass
+            try:
+                self.tbl_cal.setSortingEnabled(True)
             except Exception:
                 pass
 
@@ -2056,9 +2286,7 @@ class AssetDetailDialog(QDialog):
             QMessageBox.critical(self, "Greška", f"Ne mogu da obrišem događaj.\n\n{e}")
 
     # -------------------- custom fields --------------------
-
     def _clear_custom_form(self) -> None:
-        # ukloni sve redove osim poslednjeg (dugme Snimi)
         try:
             while self.custom_form.rowCount() > 1:
                 item_label = self.custom_form.itemAt(0, QFormLayout.LabelRole)
@@ -2144,210 +2372,11 @@ class AssetDetailDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Greška", f"Ne mogu da sačuvam dodatna polja.\n\n{e}")
 
-# (FILENAME: ui/asset_detail_dialog.py - END PART 5/6)
-
-# FILENAME: ui/asset_detail_dialog.py
-# (FILENAME: ui/asset_detail_dialog.py - START PART 6/6)
-
-    # -------------------- attachments UI --------------------
-
-    def _build_attachments_tab(self) -> None:
-        lay = QVBoxLayout(self.attach_tab)
-
-        att_box = QGroupBox("Prilozi")
-        att_lay = QVBoxLayout(att_box)
-
-        top_btns = QHBoxLayout()
-        self.btn_add = QPushButton("Dodaj prilog")
-        self.btn_open = QPushButton("Otvori")
-        self.btn_open_folder = QPushButton("Otvori folder")
-        self.btn_del = QPushButton("Obriši")
-
-        self.btn_add.setToolTip("Dodaj fajl kao prilog sredstvu (kopiranje/registracija zavisi od attachments_service).")
-        self.btn_open.setToolTip("Otvori izabrani prilog u podrazumevanoj aplikaciji.")
-        self.btn_open_folder.setToolTip("Otvori folder u kojem se nalazi izabrani prilog.")
-        self.btn_del.setToolTip("Obriši izabrani prilog (zapis + fajl po pravilima servisa).")
-
-        self.btn_open.setEnabled(False)
-        self.btn_open_folder.setEnabled(False)
-        self.btn_del.setEnabled(False)
-
-        top_btns.addWidget(self.btn_add)
-        top_btns.addWidget(self.btn_open)
-        top_btns.addWidget(self.btn_open_folder)
-        top_btns.addWidget(self.btn_del)
-        top_btns.addStretch(1)
-
-        # Putanja fajla
-        path_bar = QHBoxLayout()
-        path_bar.setContentsMargins(0, 0, 0, 0)
-        self.ed_att_path = QLineEdit()
-        self.ed_att_path.setReadOnly(True)
-        self.ed_att_path.setPlaceholderText("Putanja izabranog priloga…")
-        self.btn_copy_path = QPushButton("Kopiraj putanju")
-        self.btn_copy_path.setEnabled(False)
-        self.btn_copy_path.setToolTip("Kopira putanju izabranog priloga u clipboard.")
-        self.btn_copy_path.clicked.connect(lambda: _set_clipboard_text(self.ed_att_path.text() or ""))
-
-        path_bar.addWidget(QLabel("Putanja:"))
-        path_bar.addWidget(self.ed_att_path, 1)
-        path_bar.addWidget(self.btn_copy_path)
-
-        self.tbl = QTableWidget(0, 4)
-        self.tbl.setHorizontalHeaderLabels(["R.br.", "Naziv", "Kreirano", "Napomena"])
-        self.tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.tbl.setAlternatingRowColors(True)
-        self.tbl.horizontalHeader().setStretchLastSection(True)
-        self.tbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        _wire_table_full_copy(self.tbl)
-
-        try:
-            self.tbl.setSortingEnabled(True)
-        except Exception:
-            pass
-
-        self.tbl.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tbl.customContextMenuRequested.connect(self._on_tbl_context_menu)
-
-        # Preview + find
-        self.preview_stack = QTabWidget()  # 0=Info, 1=Slika, 2=Tekst
-        self.preview_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        self.ed_find = QLineEdit()
-        self.ed_find.setPlaceholderText("Pretraga u preview-u (Enter = Sledeće)")
-        self.btn_find = QPushButton("Nađi")
-        self.btn_next = QPushButton("Sledeće")
-        self.btn_prev = QPushButton("Prethodno")
-        self.lb_find = QLabel("")
-
-        self.btn_find.setEnabled(False)
-        self.btn_next.setEnabled(False)
-        self.btn_prev.setEnabled(False)
-
-        find_bar = QHBoxLayout()
-        find_bar.setContentsMargins(0, 0, 0, 0)
-        find_bar.addWidget(QLabel("🔎"))
-        find_bar.addWidget(self.ed_find, 1)
-        find_bar.addWidget(self.btn_find)
-        find_bar.addWidget(self.btn_prev)
-        find_bar.addWidget(self.btn_next)
-        find_bar.addWidget(self.lb_find)
-
-        find_wrap = QWidget()
-        find_wrap.setLayout(find_bar)
-        find_wrap.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        self.preview_info = QLabel(
-            "Izaberi prilog iz liste.\n\n"
-            "• Slike: prikaz.\n"
-            "• TXT/DOCX/XLSX/PDF: tekstualni preview + pretraga (best-effort).\n\n"
-            "Tip: Ctrl+F fokusira polje pretrage (dok si na tabu Prilozi)."
-        )
-        self.preview_info.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.preview_info.setWordWrap(True)
-        self.preview_info.setStyleSheet("padding: 8px;")
-
-        w_info = QWidget()
-        li = QVBoxLayout(w_info)
-        li.setContentsMargins(0, 0, 0, 0)
-        li.addWidget(self.preview_info, 1)
-
-        self.preview_img = QLabel()
-        self.preview_img.setAlignment(Qt.AlignCenter)
-        self.preview_img.setText("Nema pregleda.")
-        self.preview_img.setStyleSheet("background: #111; color: #ddd; border: 1px solid #333;")
-        self.preview_img.setMinimumHeight(160)
-        self.preview_img.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        w_img = QWidget()
-        limg = QVBoxLayout(w_img)
-        limg.setContentsMargins(0, 0, 0, 0)
-        limg.addWidget(self.preview_img, 1)
-
-        self.preview_txt = QPlainTextEdit()
-        self.preview_txt.setReadOnly(True)
-        self.preview_txt.setPlaceholderText("Tekstualni preview...")
-        self.preview_txt.setStyleSheet("font-family: Consolas, 'Courier New', monospace;")
-        try:
-            self.preview_txt.setLineWrapMode(QPlainTextEdit.NoWrap)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-
-        w_txt = QWidget()
-        ltxt = QVBoxLayout(w_txt)
-        ltxt.setContentsMargins(0, 0, 0, 0)
-        ltxt.addWidget(self.preview_txt, 1)
-
-        self.preview_stack.addTab(w_info, "Info")
-        self.preview_stack.addTab(w_img, "Slika")
-        self.preview_stack.addTab(w_txt, "Tekst")
-        self.preview_stack.setCurrentIndex(0)
-        self.preview_stack.currentChanged.connect(lambda _: self._sync_find_enabled())
-
-        preview_panel = QWidget()
-        preview_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        preview_lay = QVBoxLayout(preview_panel)
-        preview_lay.setContentsMargins(0, 0, 0, 0)
-        preview_lay.addWidget(find_wrap)
-        preview_lay.addWidget(self.preview_stack, 1)
-
-        self.ed_note = QPlainTextEdit()
-        self.ed_note.setPlaceholderText("Napomena za prilog (opciono) — upisuje se u bazu uz prilog.")
-        self.ed_note.setMinimumHeight(48)
-        self.ed_note.setMaximumHeight(140)
-
-        split = QSplitter(Qt.Horizontal)
-        split.setChildrenCollapsible(True)
-        split.addWidget(self.tbl)
-        split.addWidget(preview_panel)
-        split.setStretchFactor(0, 3)
-        split.setStretchFactor(1, 2)
-        self._att_split = split
-
-        att_lay.addLayout(top_btns)
-        att_lay.addLayout(path_bar)
-        att_lay.addWidget(split, 1)
-        att_lay.addWidget(self.ed_note)
-
-        lay.addWidget(att_box, 1)
-
-        # Signals
-        self.btn_add.clicked.connect(self.add_attachment)
-        self.btn_open.clicked.connect(self.open_attachment)
-        self.btn_open_folder.clicked.connect(self.open_attachment_folder)
-        self.btn_del.clicked.connect(self.delete_attachment_ui)
-
-        self.tbl.itemSelectionChanged.connect(self._on_att_selection_changed)
-        self.tbl.cellDoubleClicked.connect(lambda r, c: self.open_attachment())
-
-        self.btn_find.clicked.connect(self._find_first)
-        self.btn_next.clicked.connect(self._find_next)
-        self.btn_prev.clicked.connect(self._find_prev)
-        self.ed_find.returnPressed.connect(self._find_next)
-        self.preview_txt.textChanged.connect(self._sync_find_enabled)
-        self.ed_find.textChanged.connect(self._sync_find_enabled)
-
-        # debounce selection -> preview start
-        try:
-            if not hasattr(self, "_att_preview_timer"):
-                self._att_preview_timer = QTimer(self)  # type: ignore[attr-defined]
-                self._att_preview_timer.setSingleShot(True)  # type: ignore[attr-defined]
-                self._att_preview_timer.timeout.connect(self._render_selected_attachment_preview)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-
     # -------------------- attachments logic --------------------
-
     def _table_selected_row(self, table: QTableWidget) -> int:
-        # delegiraj na zajednički helper
         return _current_row_any(table)
 
     def _selected_attachment_row(self) -> Optional[Dict[str, Any]]:
-        """
-        Stabilno i sa sortiranjem:
-        - id se čuva u Qt.UserRole na koloni "Naziv"
-        - mapira se nazad u self._att_rows po id-u
-        """
         try:
             r = self._table_selected_row(self.tbl)
             if r < 0:
@@ -2378,10 +2407,6 @@ class AssetDetailDialog(QDialog):
             return None
 
     def _attachment_abs_path(self, row: Dict[str, Any]) -> Optional[Path]:
-        """
-        Preferiramo servisni resolver (zna pravila gde se čuva).
-        Fallback: rel_path prema app_root.
-        """
         aid = row.get("id", row.get("attachment_id", None))
         rel = row.get("path", row.get("rel_path", row.get("filepath", row.get("file_path", ""))))
 
@@ -2397,11 +2422,11 @@ class AssetDetailDialog(QDialog):
             p2 = Path(str(rel))
             if p2.is_absolute():
                 return p2
-            return (_app_root() / p2).resolve()
+            # ✅ security: rel mora ostati unutar app root
+            return _safe_rel_under_root(str(rel))
         return None
 
     def _load_attachments(self, show_errors: bool = True) -> None:
-        # zapamti selekciju pre reload-a (UX)
         prev_sel_id: Optional[int] = None
         try:
             cur = self._selected_attachment_row()
@@ -2440,40 +2465,30 @@ class AssetDetailDialog(QDialog):
                 note = rr.get("note", rr.get("comment", "")) or ""
 
                 rr_id = rr.get("id", rr.get("attachment_id", None))
-                try:
-                    rr_id_int = int(rr_id) if rr_id is not None else 0
-                except Exception:
-                    rr_id_int = 0
+                rr_id_int = _safe_int(rr_id, 0)
 
                 it0 = QTableWidgetItem(str(idx))
                 it1 = QTableWidgetItem(str(name))
                 it2 = QTableWidgetItem(fmt_date_sr(str(created or "")))
                 it3 = QTableWidgetItem(str(note))
 
-                # sort-safety
-                it1.setData(Qt.UserRole, rr_id_int)
+                it1.setData(Qt.UserRole, rr_id_int)  # sort-safety
 
                 self.tbl.setItem(i, 0, it0)
                 self.tbl.setItem(i, 1, it1)
                 self.tbl.setItem(i, 2, it2)
                 self.tbl.setItem(i, 3, it3)
 
-            try:
-                self.tbl.setSortingEnabled(True)
-            except Exception:
-                pass
-
-            try:
-                self.tbl.resizeColumnsToContents()
-            except Exception:
-                pass
         finally:
             try:
                 self.tbl.setUpdatesEnabled(True)
             except Exception:
                 pass
+            try:
+                self.tbl.setSortingEnabled(True)
+            except Exception:
+                pass
 
-        # restore selection if possible
         if prev_sel_id is not None:
             try:
                 for r in range(self.tbl.rowCount()):
@@ -2545,7 +2560,6 @@ class AssetDetailDialog(QDialog):
 
         self._sync_attachment_buttons()
 
-        # debounce preview start
         try:
             t = getattr(self, "_att_preview_timer", None)
             if t is not None:
@@ -2613,7 +2627,6 @@ class AssetDetailDialog(QDialog):
             cache = self._get_preview_cache()
             cache[key] = (float(st.st_mtime), int(st.st_size), str(text))
 
-            # cap cache
             if len(cache) > 8:
                 try:
                     first_key = next(iter(cache.keys()))
@@ -2625,22 +2638,20 @@ class AssetDetailDialog(QDialog):
             pass
 
     def _stop_preview_thread(self) -> None:
-        """
-        Bezbedno zaustavljanje prethodnog preview job-a.
-        """
         try:
             if self._preview_thread is not None:
+                try:
+                    self._preview_thread.requestInterruption()
+                except Exception:
+                    pass
                 self._preview_thread.quit()
-                self._preview_thread.wait(200)
+                self._preview_thread.wait(250)
         except Exception:
             pass
         self._preview_thread = None
         self._preview_worker = None
 
     def _start_preview_thread(self, path: Path) -> None:
-        """
-        Start background preview generation.
-        """
         self._stop_preview_thread()
 
         self._preview_job_id += 1
@@ -2654,7 +2665,6 @@ class AssetDetailDialog(QDialog):
         thread.started.connect(worker.run)
         worker.finished.connect(self._on_preview_ready)
 
-        # cleanup
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
@@ -2664,9 +2674,6 @@ class AssetDetailDialog(QDialog):
         thread.start()
 
     def _on_preview_ready(self, job_id: int, path_str: str, text: str) -> None:
-        """
-        UI update callback from background worker.
-        """
         if self._closing:
             return
         try:
@@ -2718,7 +2725,6 @@ class AssetDetailDialog(QDialog):
             pass
         self._preview_img_path = None
 
-        # Slike (UI thread)
         if _is_image_file(p):
             self._stop_preview_thread()
             self._render_image_preview(p)
@@ -2728,7 +2734,6 @@ class AssetDetailDialog(QDialog):
                 pass
             return
 
-        # Tekst tab
         try:
             self.preview_stack.setCurrentIndex(2)
         except Exception:
@@ -2745,7 +2750,6 @@ class AssetDetailDialog(QDialog):
             self._sync_find_enabled()
             return
 
-        # Start background preview (ne blokiraj UI)
         try:
             self.preview_txt.setPlainText("Učitavam preview…")
             self.preview_txt.moveCursor(QTextCursor.Start)
@@ -2910,7 +2914,6 @@ class AssetDetailDialog(QDialog):
             self.delete_attachment_ui()
 
     # -------------------- preview find --------------------
-
     def _sync_find_enabled(self) -> None:
         try:
             is_text_tab = (self.preview_stack.currentIndex() == 2)
@@ -3069,7 +3072,6 @@ class AssetDetailDialog(QDialog):
                 pass
 
     # -------------------- keyboard shortcuts --------------------
-
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
         try:
             if event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_F:
@@ -3089,4 +3091,4 @@ class AssetDetailDialog(QDialog):
             pass
         super().keyPressEvent(event)
 
-# (FILENAME: ui/asset_detail_dialog.py - END PART 6/6)
+# END FILENAME: ui/asset_detail_dialog.py

@@ -4,36 +4,11 @@
 """
 BazaS2 (offline) — ui/metrology_page.py
 
-Metrologija UI (V1):
-- lista zapisa + asset sažetak (ako je dostupan)
-- filter: search + status + warn_days
-- CRUD (novo/izmeni/obriši)
-- audit po zapisu
-- AssetDetailDialog (ako user ima prava)
-- Kolone (redosled/skrivanje/širine) + autosave (ui/utils/table_columns.py)
-- Context menu + Ctrl+C copy (ui/utils/table_copy.py)
-- Auto-refresh preko mtime DB fajla (QTimer)
-
-NAPOMENA (FIX):
-- Ako korisnik nema pristup listi sredstava, "Novi zapis" dijalog prelazi na ručni unos Asset UID
-  (sigurno jer servis radi finalni RBAC/scope).
-
-STANDARD tabela (V1.x):
-- ✅ Rb (#) kao prva kolona
-- ✅ Sort ON + header clickable
-- ✅ Drag&Drop kolona po headeru (sectionsMovable)
-- ✅ TableToolsBar quick filter (client-side hideRow)
-- ✅ Renumeracija posle sortiranja i posle filtera (broji samo vidljive redove)
-
-V1.x polish / best-practice:
-- ✅ setEditTriggers(NoEditTriggers)
-- ✅ sortiranje datuma preko Qt.UserRole sort key
-- ✅ Cache assets_brief (po DB mtime) da refresh ne “ubija” UI
-- ✅ Auto-refresh preskače kada je otvoren modal dijalog
-- ✅ Ne mutiramo dict iz servisa “u mestu”
-- ✅ Kolona "Nomenklaturni br."
-- ✅ UX: zadržavanje selekcije nakon refresh-a (met_uid)
-- ✅ UX: debounce load na brze promene (status/warn) da ne “spamma” servis/UI
+Hardening + usklađivanje sa novim pravilima (bez menjanja izgleda i postojećih UX elemenata):
+- ✅ Prikazujemo samo metrologija sredstva (assets.is_metrology=1) KAD GOD možemo da potvrdimo preko assets map-a.
+- ✅ Status: "NEPOZNATO" ako nije unet datum etaloniranja (calib_date je prazan),
+  čak i ako valid_until postoji. (UI pravilo kao na dashboard-u)
+- ✅ Debounce + cache i dalje rade, bez dodatnog “opterećenja”.
 """
 
 from __future__ import annotations
@@ -180,14 +155,21 @@ def _today_iso() -> str:
     return date.today().isoformat()
 
 
-def _status_for_valid_until_ui(valid_until_iso: str, warn_days: int = 30) -> str:
+def _status_for_record_ui(calib_date_iso: str, valid_until_iso: str, warn_days: int = 30) -> str:
     """
-    Prefer servisnu funkciju (jedan izvor istine),
-    fallback na UI implementaciju ako servis nije dostupan.
+    Pravilo (po zahtevu):
+    - ako calib_date nije unet -> NEPOZNATO
+    - inače status računamo po valid_until (prefer servisnu logiku)
     """
+    cd = (calib_date_iso or "").strip()
+    if not cd:
+        return "NEPOZNATO"
+
     if callable(_svc_status_for_valid_until):
         try:
-            return str(_svc_status_for_valid_until(valid_until_iso, warn_days=warn_days) or "NEPOZNATO").strip().upper()
+            st = str(_svc_status_for_valid_until(valid_until_iso, warn_days=warn_days) or "NEPOZNATO").strip().upper()
+            # servis tipično vraća ISTICE/ISTEKLO/OK/NEPOZNATO
+            return st or "NEPOZNATO"
         except Exception:
             pass
 
@@ -258,6 +240,44 @@ def _current_row_any(table: QTableWidget) -> int:
     except Exception:
         pass
     return -1
+
+
+# -------------------- Asset helpers (metrology flag) --------------------
+def _asset_is_metrology(a: Optional[Dict[str, Any]]) -> bool:
+    if not a or not isinstance(a, dict):
+        return False
+    for k in ("is_metrology", "is_metro", "metrology_flag", "metro_flag"):
+        v = a.get(k)
+        if v is None:
+            continue
+        try:
+            if isinstance(v, bool):
+                return bool(v)
+            if isinstance(v, (int, float)):
+                return int(v) == 1
+            s = str(v).strip().lower()
+            if s in ("1", "true", "yes", "da", "on"):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _list_assets_brief_safe(limit: int = 5000, *, metrology_only: bool = False) -> List[Dict[str, Any]]:
+    """
+    Best-effort wrapper zbog kompatibilnosti potpisa + RBAC.
+    """
+    try:
+        return list_assets_brief(limit=limit, metrology_only=bool(metrology_only))  # type: ignore[call-arg]
+    except TypeError:
+        try:
+            return list_assets_brief(limit=limit)  # type: ignore[misc]
+        except Exception:
+            return []
+    except PermissionError:
+        return []
+    except Exception:
+        return []
 
 
 # -------------------- Sort helpers (critical: date sort) --------------------
@@ -354,6 +374,14 @@ def _resolve_db_path_for_mtime() -> Path:
     Mora da pokazuje na ISTI DB fajl kao core.db.connect_db.
     """
     try:
+        from core.db import get_db_path  # type: ignore
+        p = str(get_db_path() or "").strip()
+        if p:
+            return Path(p).resolve()
+    except Exception:
+        pass
+
+    try:
         from core.paths import DB_PATH  # type: ignore
         if DB_PATH:
             return Path(DB_PATH).resolve()
@@ -362,14 +390,14 @@ def _resolve_db_path_for_mtime() -> Path:
 
     try:
         from core.config import DB_FILE  # type: ignore
-        p = Path(DB_FILE)
+        p2 = Path(DB_FILE)
     except Exception:
-        p = Path("data/db/bazas2.sqlite")
+        p2 = Path("data/db/bazas2.sqlite")
 
-    if not p.is_absolute():
+    if not p2.is_absolute():
         root = Path(__file__).resolve().parents[1]
-        p = (root / p).resolve()
-    return p
+        p2 = (root / p2).resolve()
+    return p2
 
 
 def _db_mtime_safe() -> float:
@@ -487,13 +515,24 @@ class MetrologyEditDialog(QDialog):
     Novi/izmena metrology zapisa.
     FIX: Ako assets_brief nije dostupan (nema prava / servis pukne),
     dozvoli ručni unos Asset UID (servis će svakako enforce-ovati RBAC/scope).
+    + NOVO: assets list je (po mogućnosti) već filtriran na is_metrology=1.
     """
     def __init__(self, assets_brief: List[Dict[str, Any]], existing: Optional[Dict[str, Any]] = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Metrologija — Novi zapis" if not existing else "Metrologija — Izmena zapisa")
         self.resize(760, 480)
 
-        self.assets = assets_brief or []
+        # Defanzivno: ako nam neko prosledi “sve”, preseci na metrology-only kad imamo flag.
+        self.assets = []
+        for a in (assets_brief or []):
+            if not isinstance(a, dict):
+                continue
+            # ako nema ključa, ne pretpostavljamo ništa; ali assets_brief_safe će već filtrirati kad može
+            if ("is_metrology" in a) or ("is_metro" in a) or ("metrology_flag" in a) or ("metro_flag" in a):
+                if not _asset_is_metrology(a):
+                    continue
+            self.assets.append(a)
+
         self.existing = existing
 
         self.cb_asset = QComboBox()
@@ -510,7 +549,7 @@ class MetrologyEditDialog(QDialog):
                 cat = a.get("category", "") or ""
                 toc = a.get("toc_number", "") or ""
                 sn = a.get("serial_number", "") or ""
-                nom = _asset_field(a, "nomenklaturni_broj", "nomenclature_no", "nomenklaturni_broj_sredstva", "nomen_number")
+                nom = _asset_field(a, "nomenclature_number", "nomenklaturni_broj", "nomenclature_no", "nomen_number")
                 label = f"{uid} | {name} | {cat}"
                 extra = []
                 if toc:
@@ -616,6 +655,28 @@ class MetrologyEditDialog(QDialog):
             return (self.ed_asset_uid.text() or "").strip()
         return (self.cb_asset.currentData() or "").strip()
 
+    def _best_effort_validate_metrology_flag(self, asset_uid: str) -> bool:
+        """
+        Ako imamo pristup assets-u: blokiraj upis metrologije na sredstvo koje nije metrology-flag.
+        Ako nemamo pristup: ne možemo da proverimo, ne blokiramo (servis je krajnji gate).
+        """
+        if not asset_uid:
+            return True
+        if not _can_asset_access_from_metrology():
+            return True
+        try:
+            a = get_asset_by_uid(asset_uid=asset_uid)
+            if not a or not isinstance(a, dict):
+                return True
+            # ako nemamo polje, ne pretpostavljamo
+            if ("is_metrology" not in a) and ("is_metro" not in a) and ("metrology_flag" not in a) and ("metro_flag" not in a):
+                return True
+            return bool(_asset_is_metrology(a))
+        except PermissionError:
+            return True
+        except Exception:
+            return True
+
     def _on_ok(self):
         asset_uid = self._asset_uid_value()
         if not asset_uid:
@@ -624,6 +685,11 @@ class MetrologyEditDialog(QDialog):
 
         if any(ch.isspace() for ch in asset_uid) or len(asset_uid) > 64:
             QMessageBox.warning(self, "Validacija", "Asset UID nije validan (razmaci ili predugačak).")
+            return
+
+        # ✅ metrology flag check (best-effort)
+        if not self._best_effort_validate_metrology_flag(asset_uid):
+            QMessageBox.warning(self, "Validacija", "Ovo sredstvo nije označeno kao METROLOGIJA (is_metrology=0).")
             return
 
         calib_type = self.cb_type.currentText().strip()
@@ -684,7 +750,7 @@ class MetrologyDetailsDialog(QDialog):
         self.lbl_asset_name = QLabel("")
         self.lbl_asset_cat = QLabel("")
         self.lbl_asset_toc = QLabel("")
-        self.lbl_asset_nomen = QLabel("")  # ✅ novo
+        self.lbl_asset_nomen = QLabel("")
         self.lbl_asset_sn = QLabel("")
         self.lbl_asset_holder = QLabel("")
         self.lbl_asset_loc = QLabel("")
@@ -722,7 +788,7 @@ class MetrologyDetailsDialog(QDialog):
         aform.addRow("Naziv", self.lbl_asset_name)
         aform.addRow("Kategorija", self.lbl_asset_cat)
         aform.addRow("TOC", self.lbl_asset_toc)
-        aform.addRow("Nomenklaturni br.", self.lbl_asset_nomen)  # ✅ novo
+        aform.addRow("Nomenklaturni br.", self.lbl_asset_nomen)
         aform.addRow("Serijski broj", self.lbl_asset_sn)
         aform.addRow("Duži", self.lbl_asset_holder)
         aform.addRow("Lokacija", self.lbl_asset_loc)
@@ -758,7 +824,6 @@ class MetrologyDetailsDialog(QDialog):
         self._load()
 
     def _load_asset_summary(self, asset_uid: str) -> None:
-        # Reset (da ne ostanu “stari” podaci)
         self.lbl_asset_name.setText("")
         self.lbl_asset_cat.setText("")
         self.lbl_asset_toc.setText("")
@@ -776,14 +841,7 @@ class MetrologyDetailsDialog(QDialog):
             self.lbl_asset_name.setText(_asset_field(a, "name"))
             self.lbl_asset_cat.setText(_asset_field(a, "category"))
             self.lbl_asset_toc.setText(_asset_field(a, "toc_number", "toc"))
-            self.lbl_asset_nomen.setText(_asset_field(
-                a,
-                "nomenklaturni_broj",
-                "nomenclature_no",
-                "nomenklaturni_broj_sredstva",
-                "nomen_number",
-                "nomenklatura",
-            ))
+            self.lbl_asset_nomen.setText(_asset_field(a, "nomenclature_number", "nomenklaturni_broj", "nomenclature_no", "nomen_number"))
             self.lbl_asset_sn.setText(_asset_field(a, "serial_number", "serial", "sn"))
             self.lbl_asset_holder.setText(_asset_field(a, "current_holder", "assigned_to"))
             self.lbl_asset_loc.setText(_asset_field(a, "location"))
@@ -800,19 +858,17 @@ class MetrologyDetailsDialog(QDialog):
                 self.reject()
                 return
 
-            # Prefer servisni status ako postoji
-            st = str(rec.get("status") or "").strip().upper()
-            if not st:
-                st = _status_for_valid_until_ui(rec.get("valid_until", "") or "", warn_days=self.warn_days)
-
+            calib_date_iso = str(rec.get("calib_date", "") or "")
+            valid_until_iso = str(rec.get("valid_until", "") or "")
+            st = _status_for_record_ui(calib_date_iso, valid_until_iso, warn_days=self.warn_days)
             self.lbl_status.setText(st)
 
             asset_uid = str(rec.get("asset_uid", "") or "")
             self.lbl_asset_uid.setText(asset_uid)
             self.lbl_type.setText(str(rec.get("calib_type", "") or ""))
 
-            self.lbl_calib_date.setText(fmt_date_sr(rec.get("calib_date", "") or ""))
-            self.lbl_valid_until.setText(fmt_date_sr(rec.get("valid_until", "") or ""))
+            self.lbl_calib_date.setText(fmt_date_sr(calib_date_iso))
+            self.lbl_valid_until.setText(fmt_date_sr(valid_until_iso))
 
             self.lbl_provider.setText(str(rec.get("provider_name", "") or ""))
             self.lbl_cert.setText(str(rec.get("cert_no", "") or ""))
@@ -862,10 +918,8 @@ class MetrologyDetailsDialog(QDialog):
 
             assets: List[Dict[str, Any]] = []
             if _can_asset_access_from_metrology():
-                try:
-                    assets = list_assets_brief(limit=5000)
-                except Exception:
-                    assets = []
+                # ✅ metrology-only assets u picker-u
+                assets = _list_assets_brief_safe(limit=5000, metrology_only=True)
 
             dlg = MetrologyEditDialog(assets, existing=existing, parent=self)
             if dlg.exec() != QDialog.Accepted:
@@ -895,7 +949,6 @@ class MetrologyDetailsDialog(QDialog):
             QMessageBox.critical(self, "Greška", f"Ne mogu da izmenim zapis.\n\n{e}")
 
 # (FILENAME: ui/metrology_page.py - END PART 1/3)
-
 
 # FILENAME: ui/metrology_page.py
 # (FILENAME: ui/metrology_page.py - START PART 2/3)
@@ -1079,7 +1132,6 @@ class MetrologyAuditDialog(QDialog):
 
 # (FILENAME: ui/metrology_page.py - END PART 2/3)
 
-
 # FILENAME: ui/metrology_page.py
 # (FILENAME: ui/metrology_page.py - START PART 3/3)
 
@@ -1099,7 +1151,6 @@ class MetrologyPage(QWidget):
         super().__init__(parent)
         self.logger = logger
 
-        # Stabilno mapiranje indeksa kolona (bez “magic numbers”)
         self._col_idx: Dict[str, int] = {name: i for i, name in enumerate(self.COLS)}
         self._IDX_RB = self._col_idx["#"]
         self._IDX_STATUS = self._col_idx["Status"]
@@ -1120,7 +1171,7 @@ class MetrologyPage(QWidget):
             ColSpec(key="asset_name", label="Naziv", default_visible=True, default_width=260),
             ColSpec(key="asset_category", label="Kategorija", default_visible=True, default_width=150),
             ColSpec(key="asset_toc", label="TOC", default_visible=True, default_width=110),
-            ColSpec(key="asset_nomen", label="Nomenklaturni br.", default_visible=True, default_width=150),  # ✅ novo
+            ColSpec(key="asset_nomen", label="Nomenklaturni br.", default_visible=True, default_width=150),
             ColSpec(key="asset_sn", label="Serijski", default_visible=True, default_width=150),
             ColSpec(key="asset_holder", label="Duži", default_visible=True, default_width=160),
             ColSpec(key="asset_loc", label="Lokacija", default_visible=True, default_width=170),
@@ -1230,7 +1281,6 @@ class MetrologyPage(QWidget):
         lay.addWidget(self.lb_rbac)
         lay.addWidget(self.table, 1)
 
-        # Debounce load (da promene status/warn ne okidaju 10 load-ova zaredom)
         self._load_debounce = QTimer(self)
         self._load_debounce.setSingleShot(True)
         self._load_debounce.setInterval(180)
@@ -1402,6 +1452,11 @@ class MetrologyPage(QWidget):
         return m
 
     def _get_assets_map_cached(self) -> Dict[str, Dict[str, Any]]:
+        """
+        ✅ Metrology-only cache:
+        - Ako možemo da dohvatimo assets_brief, uzimamo samo metrologija sredstva (flag=1).
+        - Ovo nam omogućava da u listi metrologije sakrijemo zapise koji su vezani za ne-metrologija sredstva.
+        """
         if not _can_asset_access_from_metrology():
             return {}
 
@@ -1409,15 +1464,10 @@ class MetrologyPage(QWidget):
         if mtime and mtime == self._assets_cache_mtime and self._assets_cache:
             return self._assets_cache
 
-        try:
-            assets = list_assets_brief(limit=5000)
-            self._assets_cache = self._safe_asset_map(assets)
-            self._assets_cache_mtime = mtime
-            return self._assets_cache
-        except Exception:
-            self._assets_cache = {}
-            self._assets_cache_mtime = mtime
-            return {}
+        assets = _list_assets_brief_safe(limit=5000, metrology_only=True)
+        self._assets_cache = self._safe_asset_map(assets)
+        self._assets_cache_mtime = mtime
+        return self._assets_cache
 
     def _schedule_load(self, show_errors: bool = False, immediate: bool = False) -> None:
         self._pending_show_errors = bool(show_errors)
@@ -1452,8 +1502,6 @@ class MetrologyPage(QWidget):
             return
 
         self._loading = True
-
-        # UX: zadrži selekciju
         prev_sel_met_uid = self._selected_met_uid()
 
         was_sorting = True
@@ -1483,9 +1531,20 @@ class MetrologyPage(QWidget):
                     continue
                 r = dict(rr)  # ne mutiramo “u mestu”
 
-                st = str(r.get("status") or "").strip().upper()
-                if not st:
-                    st = _status_for_valid_until_ui(str(r.get("valid_until", "") or ""), warn_days)
+                asset_uid = str(r.get("asset_uid", "") or "").strip()
+                is_orphan = int(r.get("is_orphan") or 0) == 1
+
+                # ✅ Metrology-only enforcement (kada assets_map postoji):
+                # - ako asset postoji u metrology-only map-u -> OK
+                # - ako NIJE u map-u i nije orphan -> preskoči (nije metrology asset ili nema flag)
+                if assets_map and asset_uid:
+                    if (asset_uid not in assets_map) and (not is_orphan):
+                        continue
+
+                calib_date_iso = str(r.get("calib_date", "") or "")
+                valid_until_iso = str(r.get("valid_until", "") or "")
+
+                st = _status_for_record_ui(calib_date_iso, valid_until_iso, warn_days=warn_days)
 
                 if status_filter != "SVE" and st != status_filter:
                     continue
@@ -1503,20 +1562,13 @@ class MetrologyPage(QWidget):
                 met_uid = str(r.get("met_uid", "") or "").strip()
                 asset_uid = str(r.get("asset_uid", "") or "").strip()
 
-                a = assets_map.get(asset_uid) if asset_uid else None
+                a = assets_map.get(asset_uid) if (asset_uid and assets_map) else None
                 status_txt = str(r.get("_status_ui", "") or "")
 
                 asset_name = _asset_field(a, "name")
                 asset_cat = _asset_field(a, "category")
                 asset_toc = _asset_field(a, "toc_number", "toc")
-                asset_nomen = _asset_field(
-                    a,
-                    "nomenklaturni_broj",
-                    "nomenclature_no",
-                    "nomenklaturni_broj_sredstva",
-                    "nomen_number",
-                    "nomenklatura",
-                )
+                asset_nomen = _asset_field(a, "nomenclature_number", "nomenklaturni_broj", "nomenclature_no", "nomen_number", "nomenklatura")
                 asset_sn = _asset_field(a, "serial_number", "serial", "sn")
                 asset_holder = _asset_field(a, "current_holder", "assigned_to")
                 asset_loc = _asset_field(a, "location")
@@ -1526,7 +1578,7 @@ class MetrologyPage(QWidget):
                 updated_raw = r.get("updated_at", "") or r.get("modified_at", "") or ""
 
                 vals: List[str] = [
-                    str(idx + 1),  # #
+                    str(idx + 1),
                     status_txt,
                     met_uid,
                     asset_uid,
@@ -1565,7 +1617,6 @@ class MetrologyPage(QWidget):
                     if c == self._IDX_RB:
                         it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-                    # UX: signal za orphan (bez dodavanja nove kolone)
                     if is_orphan and c == self._IDX_ASSET_UID:
                         try:
                             it.setToolTip("ORPHAN: Metrologija postoji, ali sredstvo nije u assets tabeli.")
@@ -1616,10 +1667,7 @@ class MetrologyPage(QWidget):
 
         assets: List[Dict[str, Any]] = []
         if _can_asset_access_from_metrology():
-            try:
-                assets = list_assets_brief(limit=5000)
-            except Exception:
-                assets = []
+            assets = _list_assets_brief_safe(limit=5000, metrology_only=True)
 
         dlg = MetrologyEditDialog(assets, existing=None, parent=self)
         if dlg.exec() != QDialog.Accepted:
