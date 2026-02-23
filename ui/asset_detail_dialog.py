@@ -3,22 +3,12 @@
 """
 BazaS2 (offline) — ui/asset_detail_dialog.py
 
-Asset Detail Dialog (V1.9+), senior revizija (stabilnost + UX):
-- Jedna, konzistentna implementacija (bez duplih metoda).
-- QDialog kao normalan prozor (resize + min/max) + persist (geometry + splitteri).
-- Tabovi: Detalji / Timeline / Kalendar / Metrologija / Dodatna polja / Prilozi (preview + pretraga).
-- Fail-safe importi za servise, robustan error handling, edge-case zaštite.
-- Preview ekstrakcije: TXT/DOCX/XLSX/PDF (best-effort; ako nema biblioteka, daje smislen tekst).
-- Offline-only: nema interneta, nema cloud poziva.
-
-KRITIČAN FIX:
-- Dodata metoda _build_attachments_tab() (prethodno je pozivana, ali nije postojala -> crash).
-
-DODATO (UX/bug hardening):
-- Metrologija “Detalji zapisa” otvara MetrologyDetailsDialog ako je dostupan.
-- Edit dialog pre-populate: prosleđuje trenutne vrednosti (self._asset_row) kroz parametar `initial` ako ga dijalog podržava.
-- Attachments fallback rel path: path traversal guard (rel putanja mora ostati unutar app root).
-- Preview thread: requestInterruption + best-effort early-exit check.
+Asset Detail Dialog:
+- Tabovi: Detalji / Timeline / Kalendar / Metrologija / Dodatna polja / Prilozi
+- Stabilan UI state (QSettings): geometry + splitteri + tab index
+- Fail-safe importi (metrology/calendar/edit)
+- Prilozi: preview (slike + tekstualni best-effort) + pretraga + open/open-folder + copy path
+- Offline-only
 """
 
 from __future__ import annotations
@@ -71,7 +61,7 @@ from PySide6.QtWidgets import (  # type: ignore
 
 from core.config import DB_FILE
 
-# ✅ Session helpers (fail-safe import) — UI ne treba da “pukne” ako import zakaže u edge build-u
+# ✅ Session helpers (fail-safe)
 try:
     from core.session import actor_name as actor_name, can as can, current_sector as current_sector  # type: ignore
 except Exception:  # pragma: no cover
@@ -123,7 +113,7 @@ except Exception as e:  # pragma: no cover
     delete_calendar_event = None  # type: ignore
     _CAL_IMPORT_ERR = str(e)
 
-# ✅ FULL CONTROL: header persist + Ctrl+C TSV + copy selekcije
+# ✅ Copy helpers
 from ui.utils.table_copy import (
     wire_table_header_plus_copy,
     wire_table_selection_plus_copy,
@@ -132,14 +122,11 @@ from ui.utils.table_copy import (
 
 log = logging.getLogger(__name__)
 
-# -------------------- QSettings keys --------------------
 _QS_ORG = "BazaS2"
 _QS_APP = "BazaS2"
 _QS_PREFIX = "ui/dialogs/AssetDetailDialog"
-# backward compat sa starim kodom (ako si ranije čuvao state u tom group-u)
 _OLD_GROUP = "ui.asset_detail_dialog"
 
-# -------------------- constants --------------------
 _REQUIRED_FIELD_LABELS: List[Tuple[str, str]] = [
     ("name", "Naziv"),
     ("category", "Kategorija"),
@@ -155,7 +142,7 @@ _REQUIRED_FIELD_LABELS: List[Tuple[str, str]] = [
 _MISSING_COLOR = "#c0392b"
 _HINT_COLOR = "#666"
 
-# ✅ RBAC import (fail-safe)
+# ✅ RBAC constants (fail-safe)
 try:
     from core.rbac import PERM_METRO_MANAGE  # type: ignore
 except Exception:  # pragma: no cover
@@ -176,7 +163,7 @@ try:
 except Exception:  # pragma: no cover
     PERM_ASSETS_EDIT = "assets.edit"
 
-# ✅ Edit dijalog (fail-safe)
+# ✅ Edit dialog (fail-safe)
 _EDIT_IMPORT_ERR = ""
 try:
     from ui.asset_edit_dialog import AssetEditDialog  # type: ignore
@@ -186,6 +173,7 @@ except Exception as e:  # pragma: no cover
 
 
 # -------------------- helpers --------------------
+
 def _app_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
@@ -215,7 +203,6 @@ def _qvariant_to_bytearray(v: Any) -> Optional[QByteArray]:
         return v
     if isinstance(v, (bytes, bytearray)):
         return QByteArray(bytes(v))
-    # QSettings ponekad vraća string repr; ne forsiramo dekodiranje
     return None
 
 
@@ -233,13 +220,11 @@ def _set_clipboard_text(text: str) -> None:
 
 
 def _can_asset_edit() -> bool:
-    # Primarno: PERM_ASSETS_EDIT, ali ostavi fallback kompatibilnost
     try:
         if bool(can(PERM_ASSETS_EDIT)):
             return True
     except Exception:
         pass
-
     for p in ("assets.update", "assets.manage", "assets.write", "assets.edit", "assets.change_status"):
         try:
             if bool(can(p)):
@@ -265,18 +250,13 @@ def _current_row_any(table: QTableWidget) -> int:
 
 
 def _q_ident(name: str) -> str:
-    """
-    Quote SQLite identifikator.
-    PRAGMA vraća imena kolona/tabela iz DB; quoting ovde daje otpornost na rezervisane reči/čudna imena.
-    """
     n = str(name or "").replace('"', '""')
     return f'"{n}"'
 
 
 def _safe_rel_under_root(rel_path: str) -> Optional[Path]:
     """
-    Security hardening (path traversal):
-    Ako je putanja RELATIVNA, mora ostati unutar app_root().
+    Path traversal guard: relativna putanja mora ostati unutar app_root().
     """
     try:
         rel = Path(str(rel_path))
@@ -295,11 +275,7 @@ def _safe_rel_under_root(rel_path: str) -> Optional[Path]:
 
 def _read_asset_row(asset_uid: str) -> Dict[str, Any]:
     """
-    Fail-safe čitanje asset reda direktno iz SQLite:
-    - prvo proba core.db.connect_db (ako postoji)
-    - fallback: sqlite3 direktno na DB_FILE
-
-    Vraća mapirano na standardne ključeve koje UI očekuje.
+    Fail-safe read assets row.
     """
     au = (asset_uid or "").strip()
     if not au:
@@ -311,22 +287,19 @@ def _read_asset_row(asset_uid: str) -> Dict[str, Any]:
         _connect_db = None  # type: ignore
 
     def _fetch_from_conn(conn: sqlite3.Connection) -> Dict[str, Any]:
-        t = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='assets';"
-        ).fetchone()
+        t = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assets' LIMIT 1;").fetchone()
         if not t:
             return {}
 
         cols = [r[1] for r in conn.execute("PRAGMA table_info(assets);").fetchall()]
+        if "asset_uid" not in cols:
+            return {}
 
         def pick(*names: str) -> str:
             for n in names:
                 if n in cols:
                     return n
             return ""
-
-        if "asset_uid" not in cols:
-            return {}
 
         col_name = pick("name", "asset_name")
         col_cat = pick("category", "cat")
@@ -364,15 +337,11 @@ def _read_asset_row(asset_uid: str) -> Dict[str, Any]:
                 sel_cols.append(c)
 
         sel_sql = ", ".join(_q_ident(c) for c in sel_cols)
-        q = f"SELECT {sel_sql} FROM assets WHERE asset_uid=? LIMIT 1;"
-        row = conn.execute(q, (au,)).fetchone()
+        row = conn.execute(f"SELECT {sel_sql} FROM assets WHERE asset_uid=? LIMIT 1;", (au,)).fetchone()
         if not row:
             return {}
 
-        out: Dict[str, Any] = {}
-        for i, c in enumerate(sel_cols):
-            out[c] = row[i]
-
+        out: Dict[str, Any] = {sel_cols[i]: row[i] for i in range(len(sel_cols))}
         sector_val = out.get(col_sector, "") if col_sector else ""
         is_metro_val = out.get(col_is_metro, 0) if col_is_metro else 0
         is_metro_int = 1 if _safe_int(is_metro_val, 0) == 1 else 0
@@ -536,7 +505,6 @@ def _extract_xlsx_text(
 
 
 def _extract_pdf_text(path: Path, max_chars: int = 200_000, max_pages: int = 5) -> str:
-    # best-effort: pypdf / PyPDF2
     try:
         try:
             from pypdf import PdfReader  # type: ignore
@@ -589,11 +557,6 @@ def _wire_table_full_copy(table: QTableWidget) -> None:
 
 
 def _load_timeline_rows(asset_uid: str, limit: int = 400) -> Tuple[List[Dict[str, Any]], str]:
-    """
-    Timeline (fail-safe): pokuša da nađe neku od standardnih tabela:
-    - audit_log / events / asset_events / timeline
-    i da izvuče događaje vezane za asset_uid.
-    """
     au = (asset_uid or "").strip()
     if not au:
         return [], "Nema asset_uid."
@@ -645,19 +608,13 @@ def _load_timeline_rows(asset_uid: str, limit: int = 400) -> Tuple[List[Dict[str
         if not col_asset:
             return [], f"Timeline tabela '{tname}' nema asset_uid kolonu."
 
-        sel = []
-        for cc in (col_ts, col_actor, col_action, col_details):
-            if cc:
-                sel.append(cc)
+        sel: List[str] = [x for x in (col_ts, col_actor, col_action, col_details) if x]
         if not sel:
             sel = c[:]
 
         order = f"ORDER BY {_q_ident(col_ts)} DESC" if col_ts else "ORDER BY rowid DESC"
         sel_sql = ", ".join(_q_ident(x) for x in sel)
-        q = (
-            f"SELECT {sel_sql} FROM {_q_ident(tname)} "
-            f"WHERE {_q_ident(col_asset)}=? {order} LIMIT ?;"
-        )
+        q = f"SELECT {sel_sql} FROM {_q_ident(tname)} WHERE {_q_ident(col_asset)}=? {order} LIMIT ?;"
         rows = conn.execute(q, (au, int(limit))).fetchall()
 
         out: List[Dict[str, Any]] = []
@@ -677,15 +634,9 @@ def _load_timeline_rows(asset_uid: str, limit: int = 400) -> Tuple[List[Dict[str
             pass
 
 
-# -------------------- preview worker (background) --------------------
-class _PreviewWorker(QObject):
-    """
-    Background worker za tekstualni preview (DOCX/XLSX/PDF/TXT/unsupported).
-    Token (job_id) + path obezbeđuju da UI ne “upisuje” pogrešan rezultat
-    kad korisnik brzo menja selekciju.
+# -------------------- preview worker --------------------
 
-    DODATO: best-effort prekid (requestInterruption).
-    """
+class _PreviewWorker(QObject):
     finished = Signal(int, str, str)  # job_id, path_str, text
 
     def __init__(self, job_id: int, path_str: str):
@@ -727,13 +678,21 @@ class _PreviewWorker(QObject):
 
 
 # -------------------- UI --------------------
+
 class AssetDetailDialog(QDialog):
     def __init__(self, asset_uid: str, parent=None):
         super().__init__(parent)
+
+        # stabilnost instance + QSS targetiranje
+        self.setObjectName("AssetDetailDialog")
+        try:
+            self.setAttribute(Qt.WA_DeleteOnClose, True)
+        except Exception:
+            pass
+
         self.asset_uid = (asset_uid or "").strip()
         self.setWindowTitle(f"Detalji sredstva — {self.asset_uid}")
 
-        # settings
         try:
             self._qs: Optional[QSettings] = QSettings(_QS_ORG, _QS_APP)
         except Exception:
@@ -743,30 +702,24 @@ class AssetDetailDialog(QDialog):
         self._base_styles: Dict[int, str] = {}
         self._closing = False
 
-        # data
         self._asset_row: Dict[str, Any] = {}
         self._cal_selected_id: int = 0
 
-        # splitters
         self._cal_split: Optional[QSplitter] = None
         self._att_split: Optional[QSplitter] = None
 
-        # attachments state
         self._att_rows: List[Dict[str, Any]] = []
         self._att_selected: Optional[Dict[str, Any]] = None
         self._preview_img_path: Optional[Path] = None
 
-        # find state
         self._last_find_text: str = ""
         self._last_find_cursor: Optional[QTextCursor] = None
 
-        # preview threading
         self._preview_job_id: int = 0
         self._preview_job_path: str = ""
         self._preview_thread: Optional[QThread] = None
         self._preview_worker: Optional[_PreviewWorker] = None
 
-        # window behavior
         self._apply_window_chrome()
         self.resize(1020, 720)
         self.setMinimumSize(640, 420)
@@ -829,7 +782,7 @@ class AssetDetailDialog(QDialog):
 
         def _k(label: str) -> QLabel:
             l = QLabel(label)
-            l.setStyleSheet(f"color: {_HINT_COLOR};")
+            l.setStyleSheet(f"color:{_HINT_COLOR};")
             return l
 
         r = 0
@@ -881,7 +834,7 @@ class AssetDetailDialog(QDialog):
         self._build_calendar_tab()
         self._build_metrology_tab()
         self._build_custom_fields_tab()
-        self._build_attachments_tab()  # ✅ FIX: metoda sada postoji
+        self._build_attachments_tab()  # ✅ KRITIČAN FIX
 
         self.tabs.addTab(self.details_tab, "Detalji")
         self.tabs.addTab(self.timeline_tab, "Timeline")
@@ -896,16 +849,17 @@ class AssetDetailDialog(QDialog):
         if close_btn is not None:
             close_btn.setText("Zatvori")
         self.btns.rejected.connect(self.reject)
+        self.btns.accepted.connect(self.reject)
 
         root = QVBoxLayout(self)
         root.addWidget(header)
         root.addWidget(self.tabs, 1)
         root.addWidget(self.btns)
 
-        # initial load
         self._reload_all()
 
     # -------------------- window chrome / persist --------------------
+
     def _settings_key(self, suffix: str) -> str:
         return f"{_QS_PREFIX}/{suffix}"
 
@@ -914,7 +868,6 @@ class AssetDetailDialog(QDialog):
             self.setSizeGripEnabled(True)
         except Exception:
             pass
-
         try:
             self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
             self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
@@ -922,7 +875,6 @@ class AssetDetailDialog(QDialog):
             self.setWindowFlag(Qt.MSWindowsFixedSizeDialogHint, False)
         except Exception:
             pass
-
         try:
             self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.setMaximumSize(16777215, 16777215)
@@ -937,7 +889,6 @@ class AssetDetailDialog(QDialog):
         restored_cal_split = False
         restored_att_split = False
 
-        # NEW KEYS
         try:
             geo_norm = _qvariant_to_bytearray(self._qs.value(self._settings_key("normal_geometry"), None))
             geo = _qvariant_to_bytearray(self._qs.value(self._settings_key("geometry"), None))
@@ -980,7 +931,7 @@ class AssetDetailDialog(QDialog):
         except Exception:
             pass
 
-        # BACKWARD COMPAT (old group) — apply ONLY if new not restored
+        # backward compat — apply only if new not restored
         try:
             self._qs.beginGroup(_OLD_GROUP)
 
@@ -1064,7 +1015,7 @@ class AssetDetailDialog(QDialog):
         except Exception:
             pass
 
-        # (opciono) upiši i “stari” format radi rollback kompatibilnosti
+        # optional old format
         try:
             self._qs.beginGroup(_OLD_GROUP)
             self._qs.setValue("geometry", self.saveGeometry())
@@ -1110,6 +1061,7 @@ class AssetDetailDialog(QDialog):
             pass
 
     # -------------------- style helpers --------------------
+
     def _remember_style(self, w: QWidget) -> None:
         try:
             self._base_styles[id(w)] = w.styleSheet() or ""
@@ -1137,6 +1089,7 @@ class AssetDetailDialog(QDialog):
             pass
 
     # -------------------- tab builders --------------------
+
     def _build_details_tab(self) -> None:
         lay = QVBoxLayout(self.details_tab)
 
@@ -1313,7 +1266,7 @@ class AssetDetailDialog(QDialog):
 
         met_top = QHBoxLayout()
         self.lb_met_info = QLabel("")
-        self.lb_met_info.setStyleSheet(f"color: {_HINT_COLOR};")
+        self.lb_met_info.setStyleSheet(f"color:{_HINT_COLOR};")
         self.cb_met_warn = QComboBox()
         self.cb_met_warn.addItems(["7", "14", "30", "60", "90"])
         self.cb_met_warn.setCurrentText("30")
@@ -1329,9 +1282,7 @@ class AssetDetailDialog(QDialog):
         met_top.addWidget(self.btn_met_open)
 
         self.tbl_met = QTableWidget(0, 7)
-        self.tbl_met.setHorizontalHeaderLabels(
-            ["Status", "Met UID", "Tip", "Datum", "Važi do", "Izvršilac/Lab", "Sertifikat"]
-        )
+        self.tbl_met.setHorizontalHeaderLabels(["Status", "Met UID", "Tip", "Datum", "Važi do", "Izvršilac/Lab", "Sertifikat"])
         self.tbl_met.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tbl_met.setAlternatingRowColors(True)
         self.tbl_met.horizontalHeader().setStretchLastSection(True)
@@ -1368,14 +1319,13 @@ class AssetDetailDialog(QDialog):
         lay.addWidget(self.custom_box, 1)
         lay.addStretch(1)
 
-    # ✅ FIX: missing builder that caused crash
+    # ✅ KRITIČAN FIX: builder za priloze
     def _build_attachments_tab(self) -> None:
         lay = QVBoxLayout(self.attach_tab)
 
         att_box = QGroupBox("Prilozi")
         att_lay = QVBoxLayout(att_box)
 
-        # Top buttons
         top_btns = QHBoxLayout()
         self.btn_add = QPushButton("Dodaj prilog")
         self.btn_open = QPushButton("Otvori")
@@ -1397,7 +1347,7 @@ class AssetDetailDialog(QDialog):
         top_btns.addWidget(self.btn_del)
         top_btns.addStretch(1)
 
-        # Path bar
+        # path bar
         path_bar = QHBoxLayout()
         path_bar.setContentsMargins(0, 0, 0, 0)
 
@@ -1414,7 +1364,7 @@ class AssetDetailDialog(QDialog):
         path_bar.addWidget(self.ed_att_path, 1)
         path_bar.addWidget(self.btn_copy_path)
 
-        # Attachments table
+        # table
         self.tbl = QTableWidget(0, 4)
         self.tbl.setHorizontalHeaderLabels(["R.br.", "Naziv", "Kreirano", "Napomena"])
         self.tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -1422,7 +1372,6 @@ class AssetDetailDialog(QDialog):
         self.tbl.horizontalHeader().setStretchLastSection(True)
         self.tbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         _wire_table_full_copy(self.tbl)
-
         try:
             self.tbl.setSortingEnabled(True)
         except Exception:
@@ -1431,13 +1380,12 @@ class AssetDetailDialog(QDialog):
         self.tbl.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tbl.customContextMenuRequested.connect(self._on_tbl_context_menu)
 
-        # Preview + find UI
+        # preview + find
         self.preview_stack = QTabWidget()  # 0=Info, 1=Slika, 2=Tekst
         self.preview_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.ed_find = QLineEdit()
         self.ed_find.setPlaceholderText("Pretraga u preview-u (Enter = Sledeće)")
-
         self.btn_find = QPushButton("Nađi")
         self.btn_next = QPushButton("Sledeće")
         self.btn_prev = QPushButton("Prethodno")
@@ -1478,7 +1426,7 @@ class AssetDetailDialog(QDialog):
         self.preview_img = QLabel()
         self.preview_img.setAlignment(Qt.AlignCenter)
         self.preview_img.setText("Nema pregleda.")
-        self.preview_img.setStyleSheet("background: #111; color: #ddd; border: 1px solid #333;")
+        self.preview_img.setStyleSheet("background:#111; color:#ddd; border:1px solid #333;")
         self.preview_img.setMinimumHeight(160)
         self.preview_img.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
@@ -1534,7 +1482,7 @@ class AssetDetailDialog(QDialog):
 
         lay.addWidget(att_box, 1)
 
-        # Signals
+        # signals
         self.btn_add.clicked.connect(self.add_attachment)
         self.btn_open.clicked.connect(self.open_attachment)
         self.btn_open_folder.clicked.connect(self.open_attachment_folder)
@@ -1550,16 +1498,16 @@ class AssetDetailDialog(QDialog):
         self.preview_txt.textChanged.connect(self._sync_find_enabled)
         self.ed_find.textChanged.connect(self._sync_find_enabled)
 
-        # Debounce selection -> preview start
+        # debounce selection -> preview
         try:
-            if not hasattr(self, "_att_preview_timer"):
-                self._att_preview_timer = QTimer(self)  # type: ignore[attr-defined]
-                self._att_preview_timer.setSingleShot(True)  # type: ignore[attr-defined]
-                self._att_preview_timer.timeout.connect(self._render_selected_attachment_preview)  # type: ignore[attr-defined]
+            self._att_preview_timer = QTimer(self)
+            self._att_preview_timer.setSingleShot(True)
+            self._att_preview_timer.timeout.connect(self._render_selected_attachment_preview)
         except Exception:
-            pass
+            self._att_preview_timer = None  # type: ignore
 
-    # -------------------- reload / header fill --------------------
+    # -------------------- reload --------------------
+
     def _reload_all(self) -> None:
         self._load_asset()
         self._load_timeline()
@@ -1570,7 +1518,8 @@ class AssetDetailDialog(QDialog):
         self._load_custom_fields()
         self._load_attachments(show_errors=False)
 
-    # -------------------- missing fields / header sync --------------------
+    # -------------------- missing fields --------------------
+
     def _missing_fields(self) -> List[str]:
         missing: List[str] = []
         for key, label in _REQUIRED_FIELD_LABELS:
@@ -1581,7 +1530,6 @@ class AssetDetailDialog(QDialog):
 
     def _apply_missing_warnings(self) -> None:
         missing = self._missing_fields()
-
         if missing:
             msg = "⚠ Nedostaju: " + ", ".join(missing)
             self.lb_missing.setText(msg)
@@ -1605,12 +1553,13 @@ class AssetDetailDialog(QDialog):
             "location": [self.lb_loc, self.det_loc],
             "current_holder": [self.lb_holder, self.det_holder],
         }
-
         for key, widgets in mapping.items():
             val = self._asset_row.get(key, "")
             is_missing = not bool(str(val or "").strip())
             for w in widgets:
                 self._set_missing_style(w, is_missing)
+
+    # -------------------- asset header fill --------------------
 
     def _load_asset(self) -> None:
         self._asset_row = _read_asset_row(self.asset_uid) or {}
@@ -1630,12 +1579,9 @@ class AssetDetailDialog(QDialog):
         self.lb_updated.setText(fmt_date_sr(str(self._asset_row.get("updated_at", "") or "")))
 
         self._set_text_or_dash(self.lb_sector, self._asset_row.get("sector", ""))
-        try:
-            self.lb_is_metro.setText("DA" if _safe_int(self._asset_row.get("is_metrology", 0), 0) == 1 else "NE")
-        except Exception:
-            self.lb_is_metro.setText("NE")
+        self.lb_is_metro.setText("DA" if _safe_int(self._asset_row.get("is_metrology", 0), 0) == 1 else "NE")
 
-        # Details tab mirrors
+        # details mirror
         self.det_uid.setText(self.asset_uid)
         self._set_text_or_dash(self.det_name, self._asset_row.get("name", ""))
         self._set_text_or_dash(self.det_status, self._asset_row.get("status", ""))
@@ -1646,11 +1592,7 @@ class AssetDetailDialog(QDialog):
         self._set_text_or_dash(self.det_holder, self._asset_row.get("current_holder", ""))
         self._set_text_or_dash(self.det_loc, self._asset_row.get("location", ""))
         self._set_text_or_dash(self.det_sector, self._asset_row.get("sector", ""))
-
-        try:
-            self.det_is_metro.setText("DA" if _safe_int(self._asset_row.get("is_metrology", 0), 0) == 1 else "NE")
-        except Exception:
-            self.det_is_metro.setText("NE")
+        self.det_is_metro.setText("DA" if _safe_int(self._asset_row.get("is_metrology", 0), 0) == 1 else "NE")
 
         self.det_created.setText(fmt_date_sr(str(self._asset_row.get("created_at", "") or "")))
         self.det_updated.setText(fmt_date_sr(str(self._asset_row.get("updated_at", "") or "")))
@@ -1686,6 +1628,7 @@ class AssetDetailDialog(QDialog):
             self.btn_scrap.setEnabled(can_edit)
 
     # -------------------- header actions --------------------
+
     def _edit_asset(self) -> None:
         if not _can_asset_edit():
             QMessageBox.warning(self, "Zabranjeno", "Nemaš pravo da menjaš detalje sredstava.")
@@ -1699,7 +1642,7 @@ class AssetDetailDialog(QDialog):
             return
 
         try:
-            # ✅ UX: pre-populate trenutnim vrednostima ako dijalog podržava parametar `initial`
+            # ✅ pre-populate ako dijalog podržava `initial`
             try:
                 dlg = AssetEditDialog(self.asset_uid, initial=dict(self._asset_row), parent=self)  # type: ignore[misc]
             except TypeError:
@@ -1711,8 +1654,7 @@ class AssetDetailDialog(QDialog):
                     except TypeError:
                         dlg = AssetEditDialog(asset_uid=self.asset_uid, parent=self)  # type: ignore[misc]
 
-            res = dlg.exec()
-            if res == QDialog.Accepted:
+            if dlg.exec() == QDialog.Accepted:
                 self._reload_all()
         except Exception as e:
             QMessageBox.critical(self, "Greška", f"Ne mogu da otvorim izmenu.\n\n{e}")
@@ -1751,12 +1693,7 @@ class AssetDetailDialog(QDialog):
 
         try:
             from core.db import update_asset_db  # type: ignore
-            update_asset_db(
-                actor=actor_name(),
-                asset_uid=self.asset_uid,
-                status=new_status,
-                source=src,
-            )
+            update_asset_db(actor=actor_name(), asset_uid=self.asset_uid, status=new_status, source=src)
             QMessageBox.information(self, "OK", ok_msg)
         except Exception as e:
             QMessageBox.critical(self, "Greška", f"Ne mogu da promenim status sredstva.\n\n{e}")
@@ -1765,9 +1702,9 @@ class AssetDetailDialog(QDialog):
         self._reload_all()
 
     # -------------------- timeline --------------------
+
     def _load_timeline(self, *args) -> None:
         rows, msg = _load_timeline_rows(self.asset_uid, limit=400)
-
         try:
             self.lb_tl_info.setText(msg)
         except Exception:
@@ -1786,11 +1723,7 @@ class AssetDetailDialog(QDialog):
 
         try:
             self.tbl_tl.setUpdatesEnabled(False)
-            try:
-                self.tbl_tl.setSortingEnabled(False)
-            except Exception:
-                pass
-
+            self.tbl_tl.setSortingEnabled(False)
             self.tbl_tl.setRowCount(0)
 
             when_key = actor_key = action_key = detail_key = ""
@@ -1834,14 +1767,12 @@ class AssetDetailDialog(QDialog):
         finally:
             try:
                 self.tbl_tl.setUpdatesEnabled(True)
-            except Exception:
-                pass
-            try:
                 self.tbl_tl.setSortingEnabled(True)
             except Exception:
                 pass
 
     # -------------------- metrology --------------------
+
     def _can_manage_metrology(self) -> bool:
         try:
             return bool(can(PERM_METRO_MANAGE))
@@ -1863,11 +1794,7 @@ class AssetDetailDialog(QDialog):
 
         asset_sec = str(self._asset_row.get("sector", "") or "").strip()
         user_sec = str(current_sector() or "").strip()
-        try:
-            is_m = _safe_int(self._asset_row.get("is_metrology", 0), 0) == 1
-        except Exception:
-            is_m = False
-
+        is_m = _safe_int(self._asset_row.get("is_metrology", 0), 0) == 1
         return bool(is_m and asset_sec and user_sec and (_norm(asset_sec) == _norm(user_sec)))
 
     def _apply_metrology_scope_ui(self) -> None:
@@ -1894,15 +1821,11 @@ class AssetDetailDialog(QDialog):
         self.btn_met_refresh.setEnabled(True)
         self.tbl_met.setEnabled(True)
 
-        try:
-            is_m = _safe_int(self._asset_row.get("is_metrology", 0), 0) == 1
-        except Exception:
-            is_m = False
-
+        is_m = _safe_int(self._asset_row.get("is_metrology", 0), 0) == 1
         if self._can_manage_metrology():
             base = "Metrologija: MANAGE (global)."
         elif self._can_sector_scope_metrology():
-            base = "Metrologija: sektor-scope (enforced u servisu)."
+            base = "Metrologija: sektor-scope."
         else:
             base = "Metrologija: scope enforced u servisu (MY/sector/manage)."
 
@@ -1946,7 +1869,6 @@ class AssetDetailDialog(QDialog):
             if fn is None:
                 raise RuntimeError(_METRO_IMPORT_ERR or "Metrology funkcija nije dostupna.")
 
-            # kompatibilnost sa različitim potpisima
             try:
                 rows = fn(self.asset_uid, warn_days=warn_days, limit=2000) or []
             except TypeError:
@@ -1969,10 +1891,7 @@ class AssetDetailDialog(QDialog):
 
         try:
             self.tbl_met.setUpdatesEnabled(False)
-            try:
-                self.tbl_met.setSortingEnabled(False)
-            except Exception:
-                pass
+            self.tbl_met.setSortingEnabled(False)
             self.tbl_met.setRowCount(0)
 
             for rr in rows:
@@ -1992,9 +1911,6 @@ class AssetDetailDialog(QDialog):
         finally:
             try:
                 self.tbl_met.setUpdatesEnabled(True)
-            except Exception:
-                pass
-            try:
                 self.tbl_met.setSortingEnabled(True)
             except Exception:
                 pass
@@ -2026,7 +1942,6 @@ class AssetDetailDialog(QDialog):
             return
 
         met_uid = self.tbl_met.item(r, 1).text() if self.tbl_met.item(r, 1) else ""
-
         m = QMenu(self)
         a_copy_uid = m.addAction("Kopiraj Met UID")
         a_copy_row = m.addAction("Kopiraj selekciju (Ctrl+C)")
@@ -2045,6 +1960,7 @@ class AssetDetailDialog(QDialog):
             self._open_met_details()
 
     # -------------------- calendar --------------------
+
     def _apply_calendar_scope_ui(self) -> None:
         if list_calendar_events_for_asset is None:
             self.btn_cal_refresh.setEnabled(False)
@@ -2053,9 +1969,6 @@ class AssetDetailDialog(QDialog):
             self.btn_cal_del.setEnabled(False)
             try:
                 self.cal.setEnabled(False)
-            except Exception:
-                pass
-            try:
                 self.tbl_cal.setEnabled(False)
             except Exception:
                 pass
@@ -2070,9 +1983,6 @@ class AssetDetailDialog(QDialog):
         self.btn_cal_add.setEnabled(True)
         try:
             self.cal.setEnabled(True)
-        except Exception:
-            pass
-        try:
             self.tbl_cal.setEnabled(True)
         except Exception:
             pass
@@ -2137,10 +2047,7 @@ class AssetDetailDialog(QDialog):
 
         try:
             self.tbl_cal.setUpdatesEnabled(False)
-            try:
-                self.tbl_cal.setSortingEnabled(False)
-            except Exception:
-                pass
+            self.tbl_cal.setSortingEnabled(False)
             self.tbl_cal.setRowCount(0)
 
             for rr in rows:
@@ -2162,13 +2069,9 @@ class AssetDetailDialog(QDialog):
                 self.tbl_cal.setItem(i, 1, QTableWidgetItem(str(when)))
                 self.tbl_cal.setItem(i, 2, QTableWidgetItem(str(etype)))
                 self.tbl_cal.setItem(i, 3, QTableWidgetItem(str(text)))
-
         finally:
             try:
                 self.tbl_cal.setUpdatesEnabled(True)
-            except Exception:
-                pass
-            try:
                 self.tbl_cal.setSortingEnabled(True)
             except Exception:
                 pass
@@ -2266,12 +2169,7 @@ class AssetDetailDialog(QDialog):
             QMessageBox.information(self, "Info", "Prvo izaberi događaj u tabeli.")
             return
 
-        reply = QMessageBox.question(
-            self,
-            "Potvrda brisanja",
-            "Obrisati događaj iz kalendara?",
-            QMessageBox.Yes | QMessageBox.No
-        )
+        reply = QMessageBox.question(self, "Potvrda brisanja", "Obrisati događaj iz kalendara?", QMessageBox.Yes | QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
 
@@ -2286,6 +2184,7 @@ class AssetDetailDialog(QDialog):
             QMessageBox.critical(self, "Greška", f"Ne mogu da obrišem događaj.\n\n{e}")
 
     # -------------------- custom fields --------------------
+
     def _clear_custom_form(self) -> None:
         try:
             while self.custom_form.rowCount() > 1:
@@ -2372,13 +2271,11 @@ class AssetDetailDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Greška", f"Ne mogu da sačuvam dodatna polja.\n\n{e}")
 
-    # -------------------- attachments logic --------------------
-    def _table_selected_row(self, table: QTableWidget) -> int:
-        return _current_row_any(table)
+    # -------------------- attachments --------------------
 
     def _selected_attachment_row(self) -> Optional[Dict[str, Any]]:
         try:
-            r = self._table_selected_row(self.tbl)
+            r = _current_row_any(self.tbl)
             if r < 0:
                 return None
             it = self.tbl.item(r, 1)  # Naziv
@@ -2390,18 +2287,14 @@ class AssetDetailDialog(QDialog):
                     return self._att_rows[r]
                 return None
 
-            try:
-                aid_int = int(aid)
-            except Exception:
+            aid_int = _safe_int(aid, -1)
+            if aid_int < 0:
                 return None
 
             for rr in self._att_rows:
                 rr_id = rr.get("id", rr.get("attachment_id", None))
-                try:
-                    if rr_id is not None and int(rr_id) == aid_int:
-                        return rr
-                except Exception:
-                    continue
+                if rr_id is not None and _safe_int(rr_id, -999999) == aid_int:
+                    return rr
             return None
         except Exception:
             return None
@@ -2422,7 +2315,6 @@ class AssetDetailDialog(QDialog):
             p2 = Path(str(rel))
             if p2.is_absolute():
                 return p2
-            # ✅ security: rel mora ostati unutar app root
             return _safe_rel_under_root(str(rel))
         return None
 
@@ -2450,10 +2342,7 @@ class AssetDetailDialog(QDialog):
 
         try:
             self.tbl.setUpdatesEnabled(False)
-            try:
-                self.tbl.setSortingEnabled(False)
-            except Exception:
-                pass
+            self.tbl.setSortingEnabled(False)
             self.tbl.setRowCount(0)
 
             for idx, rr in enumerate(rows, start=1):
@@ -2471,7 +2360,6 @@ class AssetDetailDialog(QDialog):
                 it1 = QTableWidgetItem(str(name))
                 it2 = QTableWidgetItem(fmt_date_sr(str(created or "")))
                 it3 = QTableWidgetItem(str(note))
-
                 it1.setData(Qt.UserRole, rr_id_int)  # sort-safety
 
                 self.tbl.setItem(i, 0, it0)
@@ -2482,13 +2370,11 @@ class AssetDetailDialog(QDialog):
         finally:
             try:
                 self.tbl.setUpdatesEnabled(True)
-            except Exception:
-                pass
-            try:
                 self.tbl.setSortingEnabled(True)
             except Exception:
                 pass
 
+        # restore selection
         if prev_sel_id is not None:
             try:
                 for r in range(self.tbl.rowCount()):
@@ -2561,10 +2447,9 @@ class AssetDetailDialog(QDialog):
         self._sync_attachment_buttons()
 
         try:
-            t = getattr(self, "_att_preview_timer", None)
-            if t is not None:
-                t.stop()
-                t.start(120)
+            if self._att_preview_timer is not None:
+                self._att_preview_timer.stop()
+                self._att_preview_timer.start(120)
             else:
                 self._render_selected_attachment_preview()
         except Exception:
@@ -2626,7 +2511,6 @@ class AssetDetailDialog(QDialog):
             st = p.stat()
             cache = self._get_preview_cache()
             cache[key] = (float(st.st_mtime), int(st.st_size), str(text))
-
             if len(cache) > 8:
                 try:
                     first_key = next(iter(cache.keys()))
@@ -2875,7 +2759,7 @@ class AssetDetailDialog(QDialog):
             QMessageBox.critical(self, "Greška", f"Ne mogu da obrišem prilog.\n\n{e}")
 
     def _on_tbl_context_menu(self, pos) -> None:
-        r = self._table_selected_row(self.tbl)
+        r = _current_row_any(self.tbl)
         if r < 0:
             return
         row = self._selected_attachment_row()
@@ -2914,6 +2798,7 @@ class AssetDetailDialog(QDialog):
             self.delete_attachment_ui()
 
     # -------------------- preview find --------------------
+
     def _sync_find_enabled(self) -> None:
         try:
             is_text_tab = (self.preview_stack.currentIndex() == 2)
@@ -3072,6 +2957,7 @@ class AssetDetailDialog(QDialog):
                 pass
 
     # -------------------- keyboard shortcuts --------------------
+
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
         try:
             if event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_F:
