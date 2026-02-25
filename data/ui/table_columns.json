@@ -692,5 +692,64 @@
       "location": 160,
       "updated_at": 150
     }
+  },
+  "metrology_table_v6": {
+    "order": [
+      "rb",
+      "status",
+      "met_uid",
+      "asset_uid",
+      "asset_name",
+      "asset_category",
+      "asset_toc",
+      "asset_nomen",
+      "asset_sn",
+      "asset_holder",
+      "asset_loc",
+      "calib_type",
+      "calib_date",
+      "valid_until",
+      "provider_name",
+      "cert_no",
+      "updated_at"
+    ],
+    "visible": {
+      "rb": true,
+      "status": true,
+      "met_uid": true,
+      "asset_uid": true,
+      "asset_name": true,
+      "asset_category": true,
+      "asset_toc": true,
+      "asset_nomen": true,
+      "asset_sn": true,
+      "asset_holder": true,
+      "asset_loc": true,
+      "calib_type": true,
+      "calib_date": true,
+      "valid_until": true,
+      "provider_name": true,
+      "cert_no": true,
+      "updated_at": true
+    },
+    "widths": {
+      "rb": 60,
+      "status": 110,
+      "met_uid": 150,
+      "asset_uid": 170,
+      "asset_name": 260,
+      "asset_category": 150,
+      "asset_toc": 110,
+      "asset_nomen": 150,
+      "asset_sn": 150,
+      "asset_holder": 160,
+      "asset_loc": 170,
+      "calib_type": 140,
+      "calib_date": 120,
+      "valid_until": 120,
+      "provider_name": 200,
+      "cert_no": 160,
+      "updated_at": 150
+    }
   }
 }

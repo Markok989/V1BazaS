@@ -1,5 +1,5 @@
 # FILENAME: ui/assets_page.py
-# (FILENAME: ui/assets_page.py - START PART 1/2)
+# (FILENAME: ui/assets_page.py - START PART 1/3)
 # -*- coding: utf-8 -*-
 """
 BazaS2 (offline) — ui/assets_page.py
@@ -16,10 +16,12 @@ Senior patch (stabilnost/UX):
 - FIX: “Reset layout” sada resetuje i KOLONE (čisti wire_columns state + runtime vrati default).
 - FIX: Row tint accent traka prati prvu VIDLJIVU kolonu (posle reorder/hide).
 - Stabilnost: fail-soft importi, guard-ovi, ne ruši UI ako helper nije tu.
+- NEW (compat): priprema za "scope-aware" service call (ako list_assets podrži scope/actor/sector u potpisu).
 """
 
 from __future__ import annotations
 
+import inspect
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -146,6 +148,29 @@ def _actor_key() -> str:
         return (actor_key() or "").strip()
     except Exception:
         return ""
+
+
+def _actor_sector_id() -> Optional[int]:
+    """
+    Best-effort: ako session ekspozuje sector_id/sector, koristi ga (za budući sector-scope).
+    Ne ruši UI ako ne postoji.
+    """
+    try:
+        from core import session as _s  # type: ignore
+        for name in ("actor_sector_id", "sector_id", "actor_sector", "sector"):
+            fn = getattr(_s, name, None)
+            if callable(fn):
+                v = fn()
+                if v is None or v is False:
+                    return None
+                try:
+                    return int(v)
+                except Exception:
+                    # ponekad je "S2" ili slično; to rešavamo kasnije u servisima
+                    return None
+    except Exception:
+        return None
+    return None
 
 
 def _settings() -> QSettings:
@@ -289,6 +314,11 @@ def _scope_candidates_lower() -> List[str]:
 
 
 def _is_my_asset_ui(r: Dict[str, Any]) -> bool:
+    """
+    UI convenience filter (ne security filter):
+    - koristi samo kao narrowing filter (za korisnike koji ionako imaju full view),
+      jer heuristika može promašiti ako se holder string razlikuje od actor_name.
+    """
     holder = _norm((r or {}).get("current_holder", "") or (r or {}).get("assigned_to", ""))
     if not holder:
         return False
@@ -781,6 +811,9 @@ class AssetsPage(QWidget):
         self._sort_col = -1
         self._sort_order = Qt.AscendingOrder
 
+        # service signature cache (performance + stability)
+        self._list_assets_param_names: Optional[set] = None
+
         # pending restore
         self._pending_splitter_state: Optional[QByteArray] = None
         self._pending_preview_collapsed: Optional[bool] = None
@@ -1073,11 +1106,10 @@ class AssetsPage(QWidget):
             self._sync_timer.start()
             self.request_reload()
 
-# (FILENAME: ui/assets_page.py - END PART 1/2)
-
+# (FILENAME: ui/assets_page.py - END PART 1/3)
 
 # FILENAME: ui/assets_page.py
-# (FILENAME: ui/assets_page.py - START PART 2/2)
+# (FILENAME: ui/assets_page.py - START PART 2/3)
 
     # -------------------- Qt events --------------------
     def closeEvent(self, e) -> None:
@@ -1394,6 +1426,7 @@ class AssetsPage(QWidget):
             if self._has_metro_view:
                 self.cb_scope.addItem(self.SCOPE_METRO)
             if self.cb_scope.count() == 0:
+                # fail-soft: UI ima bar nešto, ali realno nema view perms
                 self.cb_scope.addItem(self.SCOPE_MY)
         finally:
             try:
@@ -1433,7 +1466,6 @@ class AssetsPage(QWidget):
                 self.lb_info.setText("Uneta je pretraga. Pritisni Enter ili klikni „Pretraži” da se primeni DB pretraga.")
                 self.lb_info.show()
             else:
-                # ako nema cap poruke, skloni hint
                 if not self._loading:
                     self.lb_info.hide()
         except Exception:
@@ -2038,7 +2070,6 @@ class AssetsPage(QWidget):
             return
         try:
             s = _settings()
-            # brute remove any keys containing our key
             try:
                 for k in list(s.allKeys()):
                     if key in k:
@@ -2046,7 +2077,6 @@ class AssetsPage(QWidget):
             except Exception:
                 pass
 
-            # also attempt grouped removals (no harm if groups don't exist)
             for grp in ("ui/table_columns", "table_columns", "ui/columns", "columns"):
                 try:
                     s.beginGroup(grp)
@@ -2077,7 +2107,6 @@ class AssetsPage(QWidget):
         - restore default header order (snapshot) ili fallback na logički redosled
         - default širine iz ColSpec / snapshot
         """
-        # show all columns first
         try:
             for i in range(self.table.columnCount()):
                 self.table.setColumnHidden(i, False)
@@ -2086,7 +2115,6 @@ class AssetsPage(QWidget):
 
         hdr = self.table.horizontalHeader()
 
-        # restore default header order/state if captured
         restored = False
         try:
             if getattr(self, "_default_header_state", None) is not None:
@@ -2095,7 +2123,6 @@ class AssetsPage(QWidget):
         except Exception:
             restored = False
 
-        # fallback: move each logical section into default visual order
         if not restored:
             try:
                 for logical in range(self.table.columnCount()):
@@ -2105,13 +2132,11 @@ class AssetsPage(QWidget):
             except Exception:
                 pass
 
-        # widths: prefer ColSpec defaults
         try:
             for i, spec in enumerate(self._col_specs):
                 if 0 <= i < self.table.columnCount():
                     hdr.resizeSection(i, int(spec.default_width))
         except Exception:
-            # fallback: use snapshot widths if present
             try:
                 if getattr(self, "_default_col_widths", None):
                     for i, w in enumerate(self._default_col_widths):
@@ -2139,7 +2164,59 @@ class AssetsPage(QWidget):
         self._reset_columns_runtime_default()
         self._state_dirty()
 
+# (FILENAME: ui/assets_page.py - END PART 2/3)
+
+# FILENAME: ui/assets_page.py
+# (FILENAME: ui/assets_page.py - START PART 3/3)
+
     # -------------------- data load --------------------
+    def _list_assets_supported_params(self) -> set:
+        """
+        Kešira imena parametara koje list_assets prihvata.
+        Time izbegavamo TypeError kad servis ne podržava nove parametre (scope/actor/sector...).
+        """
+        if self._list_assets_param_names is not None:
+            return self._list_assets_param_names
+        names: set = set()
+        try:
+            if callable(list_assets):
+                sig = inspect.signature(list_assets)
+                for p in sig.parameters.values():
+                    # *args/**kwargs -> tretiramo kao "podržava sve"
+                    if p.kind in (p.VAR_KEYWORD, p.VAR_POSITIONAL):
+                        names.add("__any__")
+                    else:
+                        names.add(p.name)
+        except Exception:
+            names = set()
+        self._list_assets_param_names = names
+        return names
+
+    def _call_list_assets(self, **kwargs) -> List[Any]:
+        """
+        Poziva list_assets fail-soft:
+        - ako servis ima **kwargs ili param, prosledi ga
+        - ako nema, izbaci ga iz kwargs (nema TypeError)
+        """
+        if not callable(list_assets):
+            raise RuntimeError("Servis list_assets nije dostupan.")
+
+        supported = self._list_assets_supported_params()
+        if "__any__" in supported:
+            try:
+                return list_assets(**kwargs) or []
+            except Exception:
+                # ako servis ima svoj interni strict, probaj "minimalni set"
+                pass
+
+        filtered: Dict[str, Any] = {}
+        for k, v in (kwargs or {}).items():
+            if k in supported:
+                filtered[k] = v
+
+        # minimalni "compat" poziv
+        return list_assets(**filtered) or []
+
     def load_assets(self) -> None:
         if not self._has_any_view or self._loading:
             return
@@ -2188,11 +2265,22 @@ class AssetsPage(QWidget):
             pass
 
         try:
-            rows_any = list_assets(
+            # --- future-proof args (service-level filtering should be added in services) ---
+            # UI scope filter is NOT security boundary. We still pass "scope" info if service supports it.
+            # Actor is never taken from UI input (only from session).
+            actor_name = _actor_name()
+            actor_key = _actor_key()
+            sector_id = _actor_sector_id()
+
+            rows_any = self._call_list_assets(
                 search=self.ed_search.text(),
                 category=self.cb_category.currentText(),
                 status=self.cb_status.currentText(),
                 limit=limit,
+                scope=scope,
+                actor=actor_name,
+                actor_key=actor_key,
+                sector_id=sector_id,
             ) or []
 
             # hard-cap banner
@@ -2212,13 +2300,14 @@ class AssetsPage(QWidget):
 
             rows = self._apply_tab_filter(rows)
 
-            # UI scope only for FULL
+            # UI scope only for FULL (narrowing convenience)
             if self._has_full_view:
                 if scope == self.SCOPE_MY:
                     rows = [r for r in rows if _is_my_asset_ui(r)]
                 elif scope == self.SCOPE_METRO:
                     rows = [r for r in rows if _is_metro_asset_ui(r)]
 
+            # local filters apply_search=False because DB search already done in service layer
             rows = self._apply_local_filters(rows, apply_search=False)
 
             try:
@@ -2539,5 +2628,5 @@ class AssetsPage(QWidget):
         self._state_dirty()
         self.request_reload()
 
-# (FILENAME: ui/assets_page.py - END PART 2/2)
+# (FILENAME: ui/assets_page.py - END PART 3/3)
 # FILENAME: ui/assets_page.py
