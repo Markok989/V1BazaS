@@ -1,4 +1,5 @@
 # FILENAME: core/rbac.py
+# (FILENAME: core/rbac.py - START PART 1/2)
 # -*- coding: utf-8 -*-
 """
 BazaS2 (offline) — core/rbac.py
@@ -20,7 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, FrozenSet
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 # ---------------------------------------------------------------------------
 # Permissions (string konstante)
@@ -54,6 +55,11 @@ PERM_METRO_MANAGE = "metrology.manage"
 PERM_METRO_WRITE = PERM_METRO_EDIT
 PERM_METRO_ADMIN = PERM_METRO_MANAGE
 
+# disposal (Priprema za rashod / Rashod)
+PERM_DISPOSAL_PREPARE = "disposal.prepare"
+PERM_DISPOSAL_APPROVE = "disposal.approve"
+PERM_DISPOSAL_DISPOSE = "disposal.dispose"
+
 # users/settings/reports
 PERM_USERS_VIEW = "users.view"
 PERM_USERS_MANAGE = "users.manage"
@@ -79,16 +85,19 @@ ROLE_ALIASES: Dict[str, str] = {
     "SUPERADMIN": ROLE_ADMIN,
     "GLOBAL_ADMIN": ROLE_ADMIN,
     "GLOBALADMIN": ROLE_ADMIN,
+
     # sector admin
     "SECTORADMIN": ROLE_SECTOR_ADMIN,
     "ADMIN_SEKTORA": ROLE_SECTOR_ADMIN,
     "SEKTOR_ADMIN": ROLE_SECTOR_ADMIN,
     "SEKTORADMIN": ROLE_SECTOR_ADMIN,
+
     # readonly
     "READ_ONLY": ROLE_READONLY,
     "RO": ROLE_READONLY,
     "VIEW_ONLY": ROLE_READONLY,
     "VIEWONLY": ROLE_READONLY,
+
     # basic
     "BASIC": ROLE_BASIC,
     "USER": ROLE_BASIC,
@@ -96,6 +105,7 @@ ROLE_ALIASES: Dict[str, str] = {
     "KORISNIK": ROLE_BASIC,
     "OBICAN": ROLE_BASIC,
     "OBICAN_KORISNIK": ROLE_BASIC,
+
     # referent metro
     "REFERENT_METROLOGIJE": ROLE_REFERENT_METRO,
     "METRO_REFERENT": ROLE_REFERENT_METRO,
@@ -117,18 +127,27 @@ ROLE_PERMS: Dict[str, Set[str]] = {
         PERM_ASSETS_CREATE,
         PERM_ASSETS_EDIT,
         PERM_ASSETS_MY_VIEW,
+
         PERM_ASSIGN_VIEW,
         PERM_ASSIGN_CREATE,
         PERM_ASSIGN_EDIT,
+
         PERM_AUDIT_VIEW,
+
         PERM_METRO_VIEW,
         PERM_METRO_EDIT,
+
+        PERM_DISPOSAL_PREPARE,
+        PERM_DISPOSAL_APPROVE,
+        PERM_DISPOSAL_DISPOSE,
+
         PERM_SETTINGS_VIEW,
         PERM_SETTINGS_MANAGE,
         PERM_USERS_VIEW,
         PERM_USERS_MANAGE,
         PERM_REPORTS_PRINT,
     },
+
     # BASIC_USER: minimalno (BASIC UI: Moj Dashboard + Moja oprema)
     ROLE_BASIC: {
         PERM_ASSETS_MY_VIEW,
@@ -137,6 +156,7 @@ ROLE_PERMS: Dict[str, Set[str]] = {
         PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
+
     # READONLY: “čitam sve, ne menjam”
     ROLE_READONLY: {
         PERM_ASSETS_VIEW,
@@ -147,48 +167,64 @@ ROLE_PERMS: Dict[str, Set[str]] = {
         PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
+
     ROLE_REFERENT_IT: {
         PERM_ASSETS_VIEW,
         PERM_ASSETS_CREATE,
         PERM_ASSETS_EDIT,
         PERM_ASSETS_MY_VIEW,
+
         PERM_ASSIGN_VIEW,
         PERM_ASSIGN_CREATE,
+
         PERM_AUDIT_VIEW,
         PERM_METRO_VIEW,
+
+        PERM_DISPOSAL_PREPARE,
+
         PERM_USERS_VIEW,
         PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
+
     ROLE_REFERENT_OS: {
         PERM_ASSETS_VIEW,
         PERM_ASSETS_CREATE,
         PERM_ASSETS_EDIT,
         PERM_ASSETS_MY_VIEW,
+
         PERM_ASSIGN_VIEW,
         PERM_ASSIGN_CREATE,
+
         PERM_AUDIT_VIEW,
         PERM_METRO_VIEW,
+
+        PERM_DISPOSAL_PREPARE,
+
         PERM_USERS_VIEW,
         PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
+
     # REFERENT_METRO: metrology scope + MY
     ROLE_REFERENT_METRO: {
         PERM_ASSETS_METRO_VIEW,
         PERM_ASSETS_MY_VIEW,
+
         PERM_METRO_VIEW,
         PERM_METRO_SCOPE_VIEW,
         PERM_METRO_MY_VIEW,
         PERM_METRO_EDIT,
+
+        PERM_DISPOSAL_PREPARE,
+
         PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
 }
 
 # ---------------------------------------------------------------------------
-# Role hierarchy (highest wins)
-# Veći broj = veća prava.
+# Role hierarchy (highest wins) — veći broj = veća prava
 # ---------------------------------------------------------------------------
 
 ROLE_PRIORITY: Dict[str, int] = {
@@ -221,7 +257,6 @@ def _user_as_dict(user: Any) -> Dict[str, Any]:
             return dict(user)
         except Exception:
             return {}
-    # objekti koji liče na dict (keys + __getitem__)
     try:
         if hasattr(user, "keys"):
             ks = list(user.keys())  # type: ignore[attr-defined]
@@ -229,7 +264,6 @@ def _user_as_dict(user: Any) -> Dict[str, Any]:
                 return {str(k): user[k] for k in ks}  # type: ignore[index]
     except Exception:
         pass
-    # plain object
     try:
         d = vars(user)
         if isinstance(d, dict):
@@ -273,7 +307,6 @@ def _split_listish_or_string(v: Any) -> List[str]:
         return []
 
     if isinstance(v, (list, tuple, set)):
-        # deterministički: set može biti random po redosledu
         items = list(v)
         if isinstance(v, set):
             items = sorted([str(x) for x in items if x is not None], key=lambda x: x.strip())
@@ -304,7 +337,6 @@ def _split_listish_or_string(v: Any) -> List[str]:
 
 
 def _is_empty_roles_value(v: Any) -> bool:
-    """Tretiraj praznu listu/str kao da roles nije postavljen (da možemo da fallbackujemo)."""
     if v is None:
         return True
     if isinstance(v, (list, tuple, set)):
@@ -315,11 +347,6 @@ def _is_empty_roles_value(v: Any) -> bool:
 
 
 def _role_key(role: Any) -> str:
-    """
-    Priprema parametar za cache:
-    - uvek vraća string (hashable)
-    - ako je role list/tuple/set -> uzima prvi token posle flatten/split (deterministički za set)
-    """
     if role is None:
         return ""
     if isinstance(role, (list, tuple, set, dict)):
@@ -330,10 +357,6 @@ def _role_key(role: Any) -> str:
 
 @lru_cache(maxsize=256)
 def _normalize_role_cached(role_key: str) -> str:
-    """
-    Normalizacija naziva role (upper + alias mapping).
-    Ako stigne CSV/;/| string, uzima se prvi token.
-    """
     r = str(role_key or "").strip().upper()
     if not r:
         return ROLE_READONLY
@@ -346,22 +369,15 @@ def _normalize_role_cached(role_key: str) -> str:
 
 
 def normalize_role(role: Any) -> str:
-    """Public normalize_role() bezbedan za cache (radi i za unhashable input)."""
     return _normalize_role_cached(_role_key(role))
 
 
 def _role_sort_key(role: str) -> Tuple[int, str]:
-    """Determinističko sortiranje rola: veći priority prvo, pa naziv."""
     rr = normalize_role(role)
     return (-int(ROLE_PRIORITY.get(rr, ROLE_PRIORITY.get(ROLE_READONLY, 0))), rr)
 
 
 def list_assigned_roles(user: Any) -> List[str]:
-    """
-    Dodeljene role (preferiraj eksplicitne liste: roles/user_roles/rbac_roles/profiles).
-    Ako ničega nema (ili je prazno), fallback na 'role' (CSV/string/list).
-    Vraća deterministički sortiranu listu (po priority desc, pa naziv).
-    """
     u = _user_as_dict(user)
 
     v = u.get("roles")
@@ -387,20 +403,13 @@ def list_assigned_roles(user: Any) -> List[str]:
     if not out:
         out = [ROLE_READONLY]
 
-    # deterministički redosled
-    out_sorted = sorted(out, key=_role_sort_key)
-    return out_sorted
+    return sorted(out, key=_role_sort_key)
 
 
 def pick_highest_role(roles: Iterable[Any]) -> str:
-    """
-    Biranje najveće role po ROLE_PRIORITY.
-    Deterministički:
-    - veći priority pobeđuje
-    - tie-break: leksikografski po nazivu role
-    """
     best = ROLE_READONLY
     best_score = int(ROLE_PRIORITY.get(best, 0))
+
     for r in roles or []:
         rr = normalize_role(r)
         if not rr:
@@ -409,28 +418,21 @@ def pick_highest_role(roles: Iterable[Any]) -> str:
         if (score > best_score) or (score == best_score and rr < best):
             best = rr
             best_score = score
+
     return best or ROLE_READONLY
 
 
 def _role_from_user(user: Any) -> str:
-    """
-    Efektivna rola:
-    1) active_role/active_profile (ako je među dodeljenim rolama)
-    2) requested (role/user_role/profile...) ali SAMO ako je u dodeljenim rolama (sprečava eskalaciju)
-    3) fallback: NAJVEĆA rola iz dodeljenih rola (ROLE_PRIORITY)
-    """
     u = _user_as_dict(user)
     assigned = list_assigned_roles(u)
     assigned_set = set(assigned)
 
-    # 1) active_role mora biti jedna od dodeljenih rola
     ar = _first_nonempty(u, ("active_role", "active_profile"))
     if ar:
         nar = normalize_role(ar)
         if nar in assigned_set:
             return nar
 
-    # 2) requested role (dozvoli samo ako je u assigned_set)
     r = _first_nonempty(u, ("role", "user_role", "rbac_role", "profile"))
     if r:
         parts = _split_listish_or_string(r)
@@ -439,17 +441,10 @@ def _role_from_user(user: Any) -> str:
             if cand in assigned_set:
                 return cand
 
-    # 3) fallback: najveća dodeljena rola (deterministički)
     return pick_highest_role(assigned) if assigned else ROLE_READONLY
 
 
 def _perm_match(granted: str, required: str) -> bool:
-    """
-    Match:
-    - '*' -> sve
-    - 'x.y' exact
-    - 'x.*' prefix
-    """
     g = (granted or "").strip().lower()
     r = (required or "").strip().lower()
     if not g or not r:
@@ -467,20 +462,12 @@ def _is_users_perm(perm: str) -> bool:
 
 @lru_cache(maxsize=64)
 def _perms_for_role(role: str) -> FrozenSet[str]:
-    """
-    Cache vraća IMMUTABLE perms (frozenset) da niko ne može slučajno da mutira cache.
-    """
     r = normalize_role(role)
     base = ROLE_PERMS.get(r) or ROLE_PERMS.get(ROLE_READONLY, set())
     return frozenset(str(p) for p in base if str(p or "").strip())
 
 
 def _apply_security_guards_to_role_perms() -> None:
-    """
-    Fail-safe guard: BASIC_USER/READONLY ne smeju imati '*' niti users.*.
-    Namerno mutiramo ROLE_PERMS (idempotentno) na startup-u,
-    da i validate_rbac_config vidi realno stanje.
-    """
     for rr in (ROLE_BASIC, ROLE_READONLY):
         rp = ROLE_PERMS.get(rr)
         if not rp:
@@ -496,14 +483,12 @@ _apply_security_guards_to_role_perms()
 
 
 def clear_rbac_caches(reapply_guards: bool = True) -> None:
-    """
-    Ako u runtime-u menjaš ROLE_PERMS/ROLE_ALIASES/ROLE_PRIORITY, pozovi ovo.
-    """
     _normalize_role_cached.cache_clear()
     _perms_for_role.cache_clear()
     if reapply_guards:
         _apply_security_guards_to_role_perms()
         _perms_for_role.cache_clear()
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -516,18 +501,16 @@ def user_has_perm(user: Any, perm: str) -> bool:
 
     role = _role_from_user(user)
 
-    # FAIL-SAFE deny:
-    # - BASIC/READONLY nikad users.*
     if role in _FAILSAFE_DENY_ROLES and _is_users_perm(p):
         return False
 
     for g in _perms_for_role(role):
         gg = (g or "").strip()
-        # fail-safe: wildcard ne važi za BASIC/READONLY čak i ako “procure”
+
         if role in _FAILSAFE_DENY_ROLES and gg == "*":
             continue
+
         if _perm_match(gg, p):
-            # dodatni fail-safe: čak i preko wildcard/prefix ne daj users.* BASIC/READONLY
             if role in _FAILSAFE_DENY_ROLES and _is_users_perm(p):
                 return False
             return True
@@ -545,9 +528,13 @@ def user_has_any_perm(user: Any, perms: Optional[Iterable[str]]) -> bool:
 
 
 def user_has_all_perms(user: Any, perms: Optional[Iterable[str]]) -> bool:
+    """
+    True samo ako user ima SVE perms.
+    - perms=None -> False
+    - perms=[] -> True (standardna logika all([])==True)
+    """
     if perms is None:
         return False
-    # prazno -> True (standardna logika "all([]) == True")
     any_seen = False
     for p in perms:
         any_seen = True
@@ -574,6 +561,11 @@ def effective_roles(user: Any) -> List[str]:
 
 def effective_perms(user: Any) -> Set[str]:
     return set(_perms_for_role(_role_from_user(user)))
+
+# (FILENAME: core/rbac.py - END PART 1/2)
+
+# FILENAME: core/rbac.py
+# (FILENAME: core/rbac.py - START PART 2/2)
 
 # ---------------------------------------------------------------------------
 # Compatibility helpers: core.rbac.can (UI fallback)
@@ -617,8 +609,13 @@ def can_all(perms: Iterable[str], user: Any = None) -> bool:
     return user_has_all_perms(u, perms)
 
 
+# ---------------------------------------------------------------------------
+# Config validation (diagnostika)
+# ---------------------------------------------------------------------------
+
 def validate_rbac_config() -> List[str]:
     warns: List[str] = []
+
     if ROLE_READONLY not in ROLE_PERMS:
         warns.append("ROLE_PERMS: nedostaje READONLY set (fallback može biti pogrešan).")
 
@@ -654,11 +651,14 @@ __all__ = [
     "PERM_ASSETS_DELETE",
     "PERM_ASSETS_METRO_VIEW",
     "PERM_ASSETS_MY_VIEW",
+
     "PERM_ASSIGN_VIEW",
     "PERM_ASSIGN_CREATE",
     "PERM_ASSIGN_EDIT",
     "PERM_ASSIGN_DELETE",
+
     "PERM_AUDIT_VIEW",
+
     "PERM_METRO_VIEW",
     "PERM_METRO_MY_VIEW",
     "PERM_METRO_SCOPE_VIEW",
@@ -666,11 +666,17 @@ __all__ = [
     "PERM_METRO_MANAGE",
     "PERM_METRO_WRITE",
     "PERM_METRO_ADMIN",
+
+    "PERM_DISPOSAL_PREPARE",
+    "PERM_DISPOSAL_APPROVE",
+    "PERM_DISPOSAL_DISPOSE",
+
     "PERM_USERS_VIEW",
     "PERM_USERS_MANAGE",
     "PERM_SETTINGS_VIEW",
     "PERM_SETTINGS_MANAGE",
     "PERM_REPORTS_PRINT",
+
     # roles
     "ROLE_ADMIN",
     "ROLE_SECTOR_ADMIN",
@@ -679,10 +685,12 @@ __all__ = [
     "ROLE_REFERENT_OS",
     "ROLE_BASIC",
     "ROLE_READONLY",
+
     # config
     "ROLE_ALIASES",
     "ROLE_PERMS",
     "ROLE_PRIORITY",
+
     # api
     "normalize_role",
     "pick_highest_role",
@@ -696,6 +704,7 @@ __all__ = [
     "list_assigned_roles",
     "validate_rbac_config",
     "clear_rbac_caches",
+
     # compat helpers
     "can",
     "can_any",
@@ -713,7 +722,6 @@ if __name__ == "__main__":  # pragma: no cover
 
     assert user_has_perm(u_admin, "anything.goes") is True
     assert user_has_perm(u_basic, PERM_USERS_VIEW) is False
-
     assert effective_role(u_multi) == "REFERENT_METRO"
     assert user_has_perm(u_multi, PERM_METRO_EDIT) is True
 
@@ -742,6 +750,13 @@ if __name__ == "__main__":  # pragma: no cover
     # cache-safety regression: normalize_role sa unhashable input (lista)
     assert normalize_role(["ADMIN", "BASIC_USER"]) == "ADMIN"
 
+    warns = validate_rbac_config()
+    # Ne pada test na warnings, ali možeš da ih ispišeš ako želiš.
     print("core/rbac.py self-test OK")
+    if warns:
+        print("WARNINGS:")
+        for w in warns:
+            print(" -", w)
 
-# END FILENAME: core/rbac.py
+# (FILENAME: core/rbac.py - END PART 2/2)
+# FILENAME: core/rbac.py

@@ -1188,3 +1188,27 @@ KeyboardInterrupt
 2026-02-23 22:19:05 | ERROR | BazaS2 | run=13f0c8e9b6 | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
 2026-02-25 21:37:47 | ERROR | BazaS2 | run=7f63281703 | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
 2026-02-25 21:38:14 | ERROR | BazaS2 | run=7f63281703 | user=Bojkovski Jelena | role=SECTOR_ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-25 22:21:09 | ERROR | BazaS2 | run=6982537d90 | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-25 22:30:24 | ERROR | BazaS2 | run=93340c9c8c | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-25 23:14:48 | ERROR | BazaS2 | run=cc6ae16972 | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-25 23:45:54 | ERROR | BazaS2 | run=a5f1104ad5 | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-25 23:56:57 | ERROR | BazaS2 | run=f6e781aa36 | user=Kresojević Marko | role=ADMIN | FATAL ERROR: 'AssetsPage' object has no attribute '_on_reload_timeout'
+2026-02-25 23:56:57 | ERROR | BazaS2 | run=f6e781aa36 | user=Kresojević Marko | role=ADMIN | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1457, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1368, in start_ui
+    win = MainWindow(logger)
+  File "D:\DEV\AppToc\V1Baza\app.py", line 965, in __init__
+    self._rebuild_ui_by_profile()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1190, in _rebuild_ui_by_profile
+    page_assets = AssetsPage(self.logger)
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 855, in __init__
+    self._reload_timer.timeout.connect(self._on_reload_timeout)
+                                       ^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'AssetsPage' object has no attribute '_on_reload_timeout'
+
+2026-02-26 00:19:42 | ERROR | BazaS2 | run=2a0f69f0dd | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-26 00:20:22 | ERROR | BazaS2 | run=2a0f69f0dd | user=Bojkovski Jelena | role=SECTOR_ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-26 00:20:47 | ERROR | BazaS2 | run=2a0f69f0dd | user=Atanacković Aleksandar | role=SECTOR_ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at

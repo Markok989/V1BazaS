@@ -1,5 +1,5 @@
 # FILENAME: services/assets_service.py
-# (FILENAME: services/assets_service.py - START PART 1/3)
+# (FILENAME: services/assets_service.py - START PART 1/2)
 # -*- coding: utf-8 -*-
 """
 BazaS2 (offline) — services/assets_service.py
@@ -9,18 +9,17 @@ Servis sloj za sredstva (assets) sa RBAC + scope filtriranjem (FAIL-CLOSED):
 - METRO: assets.metrology.view (metrology-scope)
 - MY: assets.my.view (samo sredstva koja korisnik trenutno duži)
 
-REV (2026-02) — hardening + metrology-only konsolidacija:
-- FIX: MY identitet više NE koristi placeholder "user" (sprečava cross-user match).
-- FIX: metrology_only / METRO scope sada PRIMARNO znači assets.is_metrology==1 (ako kolona postoji).
-  Legacy fallback ostaje (metrology_records / heuristike) samo kad flag nije dostupan.
-- FIX: list_assets / list_assets_brief prosleđuju core.db `metrology_only` kada je tražen METRO
-  (nije se slalo ranije → UI je videla “sva sredstva” u metrology dijalozima).
-- Stabilniji SQLite schema cache: invalidacija preko PRAGMA user_version, a ako je 0 → schema_version table.
-- Perf: DB putanja keširana (sprečava “dve baze” + manje overhead-a).
-- Bez promene osnovne logike: i dalje FAIL-CLOSED + tolerantno na UI scope stringove.
+Senior rev (2026-02-26) — HARDENED:
+- Security scope je PRVOKLASNI filter: koristi core.session.effective_scope() (ALL|SECTOR|MY) kad postoji.
+- SECTOR scope bez sektora -> eksplicitno fail-closed (PermissionError), ne “tiho prazno”.
+- MY scope: preferira DB-level identitet (current_holder_user_id / current_holder_key) kad postoji,
+  tek onda fallback na tekstualno poređenje (legacy).
+- Requested scope (UI): ALL/MY/METRO je samo narrowing, nikad widening.
+- Compat: _call_compatible za različite potpise core.db funkcija.
+- Perf: signature cache + schema token invalidacija + DB path cache.
 
-Napomena:
-- Offline only, bez interneta.
+Output:
+- canonical nomenclature field (nomenclature_no + nomenclature_number).
 """
 
 from __future__ import annotations
@@ -63,8 +62,20 @@ except Exception:  # pragma: no cover
             return "READONLY"
 
 
-_ASSETS_LIST_PERMS: List[str] = [PERM_ASSETS_VIEW, PERM_ASSETS_METRO_VIEW, PERM_ASSETS_MY_VIEW]
+# Optional perms for disposal workflow (ako core.rbac još nema konstante – fallback strings)
+try:
+    from core.rbac import (  # type: ignore
+        PERM_DISPOSAL_PREPARE,
+        PERM_DISPOSAL_APPROVE,
+        PERM_DISPOSAL_DISPOSE,
+    )
+except Exception:  # pragma: no cover
+    PERM_DISPOSAL_PREPARE = "disposal.prepare"
+    PERM_DISPOSAL_APPROVE = "disposal.approve"
+    PERM_DISPOSAL_DISPOSE = "disposal.dispose"
 
+
+_ASSETS_LIST_PERMS: List[str] = [PERM_ASSETS_VIEW, PERM_ASSETS_METRO_VIEW, PERM_ASSETS_MY_VIEW]
 
 # -------------------- Scope normalization (UI <-> Service contract) --------------------
 SCOPE_AUTO = "AUTO"
@@ -75,7 +86,7 @@ SCOPE_METRO = "METRO"
 
 def _norm_scope(scope: Any) -> str:
     """
-    Normalizuje scope iz UI (srpski tekst) ili internog koda u:
+    Normalizuje requested scope iz UI (srpski tekst) ili internog koda u:
       - ALL, MY, METRO, ili "" (nepoznato / nije traženo)
 
     Tolerantno:
@@ -105,15 +116,14 @@ def _norm_scope(scope: Any) -> str:
 
 
 def _parse_scope(scope: Any) -> str:
-    """
-    Jedan ulaz za scope: vraća AUTO/ALL/MY/METRO.
-    """
+    """Jedan ulaz za requested scope: vraća AUTO/ALL/MY/METRO."""
     s = _norm_scope(scope)
     if s in (SCOPE_ALL, SCOPE_MY, SCOPE_METRO):
         return s
     return SCOPE_AUTO
 
 
+# -------------------- Session / RBAC helpers --------------------
 def _safe_can(perm: str) -> bool:
     try:
         from core.session import can  # type: ignore
@@ -146,52 +156,6 @@ def _require_login(src: str = "") -> None:
         raise PermissionError("Session nije dostupna (nisi prijavljen).")
 
 
-def _actor_name_for_audit() -> str:
-    """
-    Audit identitet može fallback na "user" (nije security boundary).
-    """
-    try:
-        from core.session import actor_name  # type: ignore
-        return (actor_name() or "").strip() or "user"
-    except Exception:
-        return "user"
-
-
-def _actor_key_for_identity() -> str:
-    """
-    Identitet za MY scope: bez placeholder-a.
-    Vraća "" ako ne znamo ko je user (fail-closed).
-    """
-    try:
-        from core.session import actor_key  # type: ignore
-        ak = (actor_key() or "").strip()
-    except Exception:
-        ak = ""
-    if not ak:
-        return ""
-    low = ak.strip().casefold()
-    if low == "user" or low == "unknown":
-        return ""
-    if low.startswith("user#0"):
-        return ""
-    return ak
-
-
-def _actor_name_for_identity() -> str:
-    """
-    Identitet za MY scope: bez placeholder-a.
-    """
-    try:
-        from core.session import actor_name  # type: ignore
-        an = (actor_name() or "").strip()
-    except Exception:
-        an = ""
-    low = an.casefold()
-    if not an or low == "user" or low == "unknown":
-        return ""
-    return an
-
-
 def _require_perm(perm: str, src: str = "") -> None:
     if not _safe_can(perm):
         where = f" ({src})" if src else ""
@@ -216,6 +180,67 @@ def _has_metro_assets_view() -> bool:
 
 def _has_my_assets_view() -> bool:
     return _safe_can(PERM_ASSETS_MY_VIEW)
+
+
+def _actor_name_for_audit() -> str:
+    """Audit identitet može fallback na 'user' (nije security boundary)."""
+    try:
+        from core.session import actor_name  # type: ignore
+        return (actor_name() or "").strip() or "user"
+    except Exception:
+        return "user"
+
+
+def _session_user_id() -> int:
+    try:
+        from core.session import current_user_id  # type: ignore
+        return int(current_user_id() or 0)
+    except Exception:
+        # fallback: pokušaj iz user dict-a
+        try:
+            from core.session import get_current_user_copy  # type: ignore
+            u = get_current_user_copy() or {}
+            raw = u.get("id", None) if isinstance(u, dict) else None
+            return int(raw or 0)
+        except Exception:
+            return 0
+
+
+def _session_actor_key_raw() -> str:
+    try:
+        from core.session import actor_key  # type: ignore
+        return (actor_key() or "").strip()
+    except Exception:
+        return ""
+
+
+def _actor_key_for_identity() -> str:
+    """
+    Identitet za MY scope: bez placeholder-a.
+    Vraća "" ako ne znamo ko je user (fail-closed).
+    """
+    ak = _session_actor_key_raw()
+    if not ak:
+        return ""
+    low = ak.strip().casefold()
+    if low in ("user", "unknown"):
+        return ""
+    if low.startswith("user#0"):
+        return ""
+    return ak
+
+
+def _actor_name_for_identity() -> str:
+    """Identitet za MY scope (display)."""
+    try:
+        from core.session import actor_name  # type: ignore
+        an = (actor_name() or "").strip()
+    except Exception:
+        an = ""
+    low = an.casefold()
+    if not an or low in ("user", "unknown"):
+        return ""
+    return an
 
 
 def _clamp_limit(limit: Any, default: int, *, min_v: int = 1, max_v: int = 100000) -> int:
@@ -262,7 +287,7 @@ def _extract_nomenclature_from_dict(d: Dict[str, Any]) -> str:
     return ""
 
 
-# -------------------- Session helpers (sector scope + identity) --------------------
+# -------------------- Session helpers (sector + role) --------------------
 def _get_current_user() -> Dict[str, Any]:
     try:
         from core.session import get_current_user  # type: ignore
@@ -279,11 +304,6 @@ def _get_current_user() -> Dict[str, Any]:
         return {}
 
 
-def _norm_sector(x: Any) -> str:
-    s = ("" if x is None else str(x)).replace("\n", " ").replace("\r", " ").strip()
-    return s[:80]
-
-
 def _current_role() -> str:
     u = _get_current_user()
     try:
@@ -294,7 +314,18 @@ def _current_role() -> str:
         return str(r2).strip().upper() or "READONLY"
 
 
+def _is_global_admin_like() -> bool:
+    r = _current_role()
+    return r in ("GLOBAL_ADMIN", "ADMIN", "SUPERADMIN")
+
+
+def _norm_sector(x: Any) -> str:
+    s = ("" if x is None else str(x)).replace("\n", " ").replace("\r", " ").strip()
+    return s[:80]
+
+
 def _current_sector() -> str:
+    """Jedno mesto za sektor iz sesije."""
     try:
         from core.session import current_sector as _cs  # type: ignore
         sec = _cs()
@@ -308,9 +339,40 @@ def _current_sector() -> str:
     return _norm_sector(sec)
 
 
-def _is_sector_scoped_metro() -> bool:
-    # postojeća logika (ne širimo scope bez dogovora)
-    return _current_role() == "REFERENT_METRO"
+def _require_sector(context: str = "") -> str:
+    """
+    Fail-closed: ako smo u SECTOR security scope, sektor MORA postojati.
+    Prefer core.session.require_sector().
+    """
+    try:
+        from core.session import require_sector as _rs  # type: ignore
+        return str(_rs(context or "assets") or "").strip()
+    except PermissionError:
+        raise
+    except Exception:
+        sec = _current_sector()
+        if sec:
+            return sec
+        ctx = (context or "").strip()
+        raise PermissionError(
+            f"Nedostaje sektor u sesiji za SECTOR scope. ({ctx})" if ctx else "Nedostaje sektor u sesiji za SECTOR scope."
+        )
+
+
+def _session_effective_scope() -> str:
+    """
+    Security scope iz sesije (ako postoji): ALL | SECTOR | MY.
+    Fail-soft: ako nema, vraća "" (nepoznato).
+    """
+    try:
+        from core.session import effective_scope  # type: ignore
+        sc = effective_scope()
+        s = ("" if sc is None else str(sc)).strip().upper()
+        if s in ("ALL", "SECTOR", "MY"):
+            return s
+    except Exception:
+        pass
+    return ""
 
 
 def _asset_sector_value(r: Dict[str, Any]) -> str:
@@ -326,9 +388,16 @@ def _sector_eq(a: str, b: str) -> bool:
 
 
 def _sector_filter_rows(rows: List[Dict[str, Any]], sector: str, *, strict: bool = True) -> List[Dict[str, Any]]:
+    """
+    strict=True (fail-closed):
+      - ako asset nema sektor -> ne prikazuj
+      - ako nema sector u sesiji -> PermissionError
+    """
     sec = _norm_sector(sector)
     if not sec:
-        return [] if strict else rows
+        if strict:
+            raise PermissionError("Nedostaje sektor u sesiji (SECTOR scope je fail-closed).")
+        return rows
 
     out: List[Dict[str, Any]] = []
     for rr in rows:
@@ -343,12 +412,44 @@ def _sector_filter_rows(rows: List[Dict[str, Any]], sector: str, *, strict: bool
             out.append(rr)
     return out
 
-# (FILENAME: services/assets_service.py - END PART 1/3)
 
-# FILENAME: services/assets_service.py
-# (FILENAME: services/assets_service.py - START PART 2/3)
+def _security_scope_policy() -> str:
+    """
+    Konačni security scope (FAIL-CLOSED):
+    - Ako sesija eksplicitno kaže ALL/SECTOR/MY -> to je maksimalni scope (sa clamp-om ALL).
+    - Ako nema -> derivacija iz RBAC:
+        assets.view => ALL
+        assets.metrology.view => SECTOR
+        assets.my.view => MY
+    """
+    sc = _session_effective_scope()
+    if sc:
+        if sc == "ALL":
+            # ALL je realno dozvoljen samo admin-like + assets.view
+            if _has_full_assets_view() and _is_global_admin_like():
+                return "ALL"
+            # clamp
+            if _has_full_assets_view():
+                return "SECTOR"
+            return "MY" if _has_my_assets_view() else ""
+        if sc in ("SECTOR", "MY"):
+            return sc
+        return ""
 
-# -------------------- MY scope helpers --------------------
+    if _has_full_assets_view():
+        return "ALL"
+    if _has_metro_assets_view():
+        return "SECTOR"
+    if _has_my_assets_view():
+        return "MY"
+    return ""
+
+
+# -------------------- MY scope helpers (DB-first, legacy fallback) --------------------
+# NEW canonical holder columns (from core/db.py v9)
+ASSET_HOLDER_USER_ID_COL = "current_holder_user_id"
+ASSET_HOLDER_KEY_COL = "current_holder_key"
+
 _TOKEN_SPLIT_RE = re.compile(r"[^\w]+", flags=re.UNICODE)
 
 
@@ -358,12 +459,7 @@ def _norm_text(x: Any) -> str:
 
 def _identity_candidates() -> List[str]:
     """
-    Kandidati identiteta za MY scope (bez placeholder-a):
-    - actor_key (username/id)  [najpouzdanije]
-    - actor_name              [display]
-    - atributi iz sesije: username/login/email/display_name/name/full_name/account/user
-    - id/user_id/uid (kao string)
-    Sve se normalizuje u lower-case, deduplikacija.
+    Legacy MY fallback (string-based). DB-first je iznad ovog.
     """
     u = _get_current_user()
     cand: List[str] = []
@@ -376,10 +472,10 @@ def _identity_candidates() -> List[str]:
     if an:
         cand.append(an)
 
-    for k in ("username", "login", "email", "display_name", "name", "full_name", "account", "user"):
+    for k in ("username", "login", "email", "display_name", "name", "full_name", "account"):
         v = u.get(k)
-        if v:
-            cand.append(str(v))
+        if v is not None and str(v).strip():
+            cand.append(str(v).strip())
 
     for k in ("id", "user_id", "uid"):
         v = u.get(k)
@@ -390,7 +486,7 @@ def _identity_candidates() -> List[str]:
     seen = set()
     for c in cand:
         cc = _norm_text(c).casefold()
-        if cc and cc not in seen:
+        if cc and cc not in seen and cc not in ("user", "unknown"):
             seen.add(cc)
             out.append(cc)
     return out
@@ -415,45 +511,64 @@ def _tokens(s: str) -> Set[str]:
     return {t for t in _TOKEN_SPLIT_RE.split(ss) if t}
 
 
-def _is_my_scope_asset(r: Dict[str, Any], *, cands: Optional[List[str]] = None) -> bool:
+def _is_my_scope_asset_dbfirst(r: Dict[str, Any]) -> bool:
     """
-    MY scope:
-    - holder mora postojati
-    - poklapanje:
-      1) exact match (lower)
-      2) token match (bez “marko” -> “markovic” lažnih pogodaka)
+    MY scope (security relevant) — DB-first:
+    1) ako red ima current_holder_user_id i poklapa se sa session user_id -> True
+    2) else, ako ima current_holder_key i poklapa se sa session actor_key -> True
+    3) else -> legacy string fallback (oprezno)
     """
     if not isinstance(r, dict):
         return False
+
+    # mora postojati holder (da ne prikažemo “bez zaduženja” u MY)
+    if not _asset_holder_value(r).strip():
+        return False
+
+    uid = _session_user_id()
+    if uid > 0 and ASSET_HOLDER_USER_ID_COL in r:
+        try:
+            return int(r.get(ASSET_HOLDER_USER_ID_COL) or 0) == int(uid)
+        except Exception:
+            pass
+
+    ak = _actor_key_for_identity()
+    if ak and ASSET_HOLDER_KEY_COL in r:
+        try:
+            return str(r.get(ASSET_HOLDER_KEY_COL) or "").strip().casefold() == ak.casefold()
+        except Exception:
+            pass
+
+    # legacy fallback
+    cands = _identity_candidates()
+    if not cands:
+        return False
+
     holder = _asset_holder_value(r).strip()
-    if not holder:
-        return False
-
     h = holder.casefold()
-    cands2 = cands if cands is not None else _identity_candidates()
-    if not cands2:
-        return False
 
-    for c in cands2:
+    # exact
+    for c in cands:
         if c and h == c:
             return True
 
+    # token match (oprezno)
     ht = _tokens(holder)
     if not ht:
         return False
-
-    for c in cands2:
-        if not c:
-            continue
-        # token match, ali tek kad kandidat ima neku “težinu”
-        if len(c) >= 4 and c in ht:
+    for c in cands:
+        if c and len(c) >= 4 and c in ht:
             return True
+
     return False
 
 
 def _my_scope_filter(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    cands = _identity_candidates()
-    return [r for r in rows if isinstance(r, dict) and _is_my_scope_asset(r, cands=cands)]
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        if isinstance(r, dict) and _is_my_scope_asset_dbfirst(r):
+            out.append(r)
+    return out
 
 
 # -------------------- DB helpers (robust) --------------------
@@ -507,6 +622,11 @@ _db_asset_has_metrology, _ = _try_import_db_func(
     "asset_has_metrology_record", "has_metrology_record_for_asset", "has_metrology_for_asset"
 )
 
+# disposal workflow (optional, introduced in core/db.py v8)
+_db_prepare_disposal, _ = _try_import_db_func("prepare_disposal_db", "prepare_disposal")
+_db_approve_disposal, _ = _try_import_db_func("approve_disposal_db", "approve_disposal")
+_db_cancel_disposal, _ = _try_import_db_func("cancel_disposal_db", "cancel_disposal")
+_db_dispose_from_case, _ = _try_import_db_func("dispose_from_case_db", "dispose_from_case")
 
 # -------------------- SQLite helpers (fallback + enrichment) --------------------
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -521,7 +641,6 @@ def _safe_cols(cols: Set[str]) -> Set[str]:
 
 
 def _app_root() -> Path:
-    # services/ -> project root
     return Path(__file__).resolve().parent.parent
 
 
@@ -587,19 +706,12 @@ def _iter_chunks(items: List[str], *, chunk_size: int = 800) -> Iterable[List[st
         yield items[i:i + chunk_size]
 
 
-# Schema cache po DB fajlu (invalidacija na schema token promenu)
 _SQLITE_SCHEMA_TOKEN: Dict[str, int] = {}
 _SQLITE_TABLE_EXISTS_CACHE: Dict[Tuple[str, str], bool] = {}
 _SQLITE_COLS_CACHE: Dict[Tuple[str, str], Set[str]] = {}
 
 
 def _schema_token(conn) -> int:
-    """
-    Stabilniji token od "user_version":
-    - ako PRAGMA user_version > 0 koristi ga
-    - inače, ako postoji schema_version tabela, koristi njen version
-    - fallback 0
-    """
     uv = 0
     try:
         row = conn.execute("PRAGMA user_version;").fetchone()
@@ -634,7 +746,6 @@ def _ensure_schema_cache_current(conn, db_path: str) -> None:
         _SQLITE_SCHEMA_TOKEN[db_path] = tok
         return
     if old != tok:
-        # invalidiraj cache za taj DB
         for k in [k for k in _SQLITE_TABLE_EXISTS_CACHE.keys() if k[0] == db_path]:
             _SQLITE_TABLE_EXISTS_CACHE.pop(k, None)
         for k in [k for k in _SQLITE_COLS_CACHE.keys() if k[0] == db_path]:
@@ -710,6 +821,11 @@ def _sqlite_cols(conn, table: str) -> Set[str]:
     _SQLITE_COLS_CACHE[key] = set(out2)
     return set(out2)
 
+# (FILENAME: services/assets_service.py - END PART 1/2)
+
+
+# FILENAME: services/assets_service.py
+# (FILENAME: services/assets_service.py - START PART 2/2)
 
 def _sqlite_select_assets_basic(
     conn,
@@ -723,12 +839,16 @@ def _sqlite_select_assets_basic(
         "rb",
         "asset_uid", "name", "category", "status",
         "toc_number", "serial_number",
+        # nomenclature variants
         "nomenclature_no", "nomenclature_number", "nomenklaturni_broj",
+        # holder variants
         "current_holder", "assigned_to",
+        # MY DB-first holder columns (optional)
+        ASSET_HOLDER_USER_ID_COL, ASSET_HOLDER_KEY_COL,
         "location",
         "updated_at", "modified_at",
-        "sector", "org_unit", "unit",
-        "is_metrology",  # ✅ bitno za METRO scope
+        "sector", "org_unit", "unit", "department", "dept",
+        "is_metrology",
     ]
     sel = [c for c in wanted if c in cols]
     if not sel:
@@ -832,6 +952,15 @@ def _norm_asset_row(r: Dict[str, Any]) -> Dict[str, Any]:
     if sn and not rr.get("serial_number"):
         rr["serial_number"] = sn
 
+    # sector normalize
+    if "sector" in rr:
+        rr["sector"] = _norm_sector(rr.get("sector"))
+    else:
+        for k in ("org_unit", "unit", "department", "dept", "sector_code"):
+            if k in rr and rr.get(k) is not None and str(rr.get(k)).strip():
+                rr["sector"] = _norm_sector(rr.get(k))
+                break
+
     # is_metrology normalize (0/1)
     if "is_metrology" in rr:
         try:
@@ -919,20 +1048,12 @@ def missing_fields_for_asset(asset: Dict[str, Any]) -> List[str]:
         missing.append("Nomenklaturni broj")
     return missing
 
-# (FILENAME: services/assets_service.py - END PART 2/3)
-
-# FILENAME: services/assets_service.py
-# (FILENAME: services/assets_service.py - START PART 3/3)
 
 # -------------------- Metrology-scope --------------------
 def _row_metrology_flag(r: Dict[str, Any]) -> Optional[bool]:
-    """
-    Vraća True/False ako imamo eksplicitni flag u redu.
-    None ako nema informacije (legacy).
-    """
+    """Vraća True/False ako imamo eksplicitni flag u redu. None ako nema informacije (legacy)."""
     if not isinstance(r, dict):
         return None
-
     for k in ("is_metrology", "is_metro", "metrology_flag", "metro_flag", "metrology_scope"):
         if k in r:
             try:
@@ -971,7 +1092,6 @@ def _asset_has_metrology_record(asset_uid: str) -> bool:
 def _bulk_assets_metrology_flag(conn, uids: List[str]) -> Set[str]:
     """
     Bulk fetch: vrati set asset_uid gde je is_metrology=1 (ako kolona postoji).
-    Ako nema kolone ili tabele -> prazan set.
     """
     out: Set[str] = set()
     if not uids:
@@ -981,6 +1101,18 @@ def _bulk_assets_metrology_flag(conn, uids: List[str]) -> Set[str]:
     cols = _sqlite_cols(conn, "assets")
     if "asset_uid" not in cols or "is_metrology" not in cols:
         return out
+
+    # perf: bez temp tabele kad je malo UID-ova
+    if len(uids) <= 900:
+        qmarks = ",".join(["?"] * len(uids))
+        try:
+            rows = conn.execute(
+                f"SELECT asset_uid FROM assets WHERE asset_uid IN ({qmarks}) AND COALESCE(is_metrology,0)=1;",
+                tuple(uids),
+            ).fetchall()
+            return {str(r[0] or "").strip() for r in rows if str(r[0] or "").strip()}
+        except Exception:
+            return set()
 
     try:
         conn.execute("CREATE TEMP TABLE IF NOT EXISTS tmp_uids(uid TEXT PRIMARY KEY);")
@@ -1000,8 +1132,8 @@ def _bulk_assets_metrology_flag(conn, uids: List[str]) -> Set[str]:
 def _is_metrology_scope_asset(r: Dict[str, Any], *, met_flag_uids: Optional[Set[str]] = None) -> bool:
     """
     METRO scope pravilo:
-    - Ako imamo is_metrology flag (u redu ili u šemi) -> samo flag=1
-    - Legacy fallback (ako flag nije dostupan): heuristike + metrology_records existence
+    - Ako imamo is_metrology flag -> samo flag=1
+    - Legacy fallback: heuristike + metrology_records existence
     """
     if not isinstance(r, dict):
         return False
@@ -1017,14 +1149,11 @@ def _is_metrology_scope_asset(r: Dict[str, Any], *, met_flag_uids: Optional[Set[
     if met_flag_uids is not None:
         return uid in met_flag_uids
 
-    # Legacy fallback: (samo kad nemamo flag)
     cat = (r.get("category") or r.get("kategorija") or "").strip().lower()
     if cat and ("metrolog" in cat or cat in {"merna oprema", "merni uredjaji", "merni uređaji"}):
         return True
 
-    for k in (
-        "needs_calibration", "calibration_required", "is_calibration_asset",
-    ):
+    for k in ("needs_calibration", "calibration_required", "is_calibration_asset"):
         if k in r:
             try:
                 if bool(r.get(k)):
@@ -1040,12 +1169,10 @@ def _metrology_scope_filter(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not only:
         return []
 
-    # Ako makar jedan red ima eksplicitni flag key, koristimo samo to (najsigurnije).
     has_flag_in_rows = any(_row_metrology_flag(r) is not None for r in only)
     if has_flag_in_rows:
         return [r for r in only if bool(_row_metrology_flag(r) is True)]
 
-    # Ako nemamo flag u rezultatima, ali šema možda ima kolonu -> bulk fetch flags.
     uids = [str(r.get("asset_uid") or "").strip() for r in only if str(r.get("asset_uid") or "").strip()]
     met_set: Optional[Set[str]] = None
     try:
@@ -1057,46 +1184,67 @@ def _metrology_scope_filter(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if met_set is not None and len(met_set) > 0:
         return [r for r in only if _is_metrology_scope_asset(r, met_flag_uids=met_set)]
 
-    # Legacy fallback (nema kolone ili nije dostupno)
     return [r for r in only if _is_metrology_scope_asset(r)]
 
 
-def _enforce_scope_one(asset: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _enforce_view_perms_one(asset: Dict[str, Any]) -> None:
     """
-    Enforce scope na nivou jednog sredstva (get_asset_by_uid).
+    Dodatni RBAC “view-type” guard (ne mešati sa security scope):
+    - assets.view -> može sve (subject to security scope)
+    - assets.metrology.view -> samo metrology sredstva
+    - assets.my.view -> samo MY sredstva
     FAIL-CLOSED.
     """
-    if not asset or not isinstance(asset, dict):
-        return asset
-
     if _has_full_assets_view():
-        return asset
+        return
 
-    if _has_my_assets_view() and _is_my_scope_asset(asset):
-        return asset
+    if _has_my_assets_view() and _is_my_scope_asset_dbfirst(asset):
+        return
 
     if _has_metro_assets_view():
         if not _is_metrology_scope_asset(asset):
             raise PermissionError("Nemaš pravo da vidiš sredstvo van metrology-scope.")
-        return asset
+        return
 
     if _has_my_assets_view():
         raise PermissionError("Nemaš pravo da vidiš sredstvo van MY scope (moja zaduženja).")
 
-    return asset
+    raise PermissionError("Nemaš pravo da vidiš sredstva (RBAC).")
 
 
-# -------------------- Requested scope (UI switch) --------------------
-def _choose_effective_scope(requested: Any) -> str:
+# -------------------- Security scope enforcement --------------------
+def _apply_security_scope(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Bira stvarni scope koji smemo da damo (FAIL-CLOSED).
-    - requested=ALL -> treba assets.view, inače fallback.
+    Primenjuje maksimalni security scope iz sesije/RBAC:
+      ALL -> ništa dodatno (ALL dozvoljen samo admin-like + assets.view)
+      SECTOR -> strict filter po sector (fail-closed ako sektor fali)
+      MY -> strict filter po my zaduženjima
+    """
+    sec_scope = _security_scope_policy()
+
+    if sec_scope == "ALL":
+        return rows
+
+    if sec_scope == "SECTOR":
+        sec = _require_sector("assets.security_scope")
+        return _sector_filter_rows(rows, sec, strict=True)
+
+    if sec_scope == "MY":
+        return _my_scope_filter(rows)
+
+    return []
+
+
+# -------------------- Requested scope (UI narrowing) --------------------
+def _choose_requested_scope(requested: Any) -> str:
+    """
+    Requested scope je UI filter (narrowing), ali ga validiramo RBAC-om.
+    - requested=ALL -> treba assets.view
     - requested=MY -> treba assets.my.view ili assets.view
     - requested=METRO -> treba assets.metrology.view ili assets.view
-    - AUTO -> prefer FULL, zatim METRO, zatim MY (stari behavior)
+    - AUTO -> prefer FULL, zatim METRO, zatim MY
     """
     req = _parse_scope(requested)
-
     has_full = _has_full_assets_view()
     has_metro = _has_metro_assets_view()
     has_my = _has_my_assets_view()
@@ -1124,7 +1272,6 @@ def _choose_effective_scope(requested: Any) -> str:
             return SCOPE_METRO
         return SCOPE_AUTO
 
-    # AUTO
     if has_full:
         return SCOPE_ALL
     if has_metro:
@@ -1134,40 +1281,28 @@ def _choose_effective_scope(requested: Any) -> str:
     return SCOPE_AUTO
 
 
-def _apply_list_scope(
+def _apply_requested_scope(
     rows: List[Dict[str, Any]],
     *,
     requested_scope: Any = "",
     metrology_only: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Centralizovano scope filtriranje za list_* pozive.
-    - Ako UI prosledi scope, poštujemo ga ako je dozvoljen.
-    - metrology_only=True forsira METRO (ali i dalje RBAC/sector važe).
-    - Sector-scope (REFERENT_METRO) kao dodatni FAIL-CLOSED filter.
+    Requested scope je UI narrowing filter.
+    metrology_only=True forsira METRO narrowing.
     """
-    is_sector = _is_sector_scoped_metro()
-    sector = _current_sector() if is_sector else ""
-
     req_scope = requested_scope
     if metrology_only is True:
         req_scope = SCOPE_METRO
 
-    eff = _choose_effective_scope(req_scope)
-
+    eff = _choose_requested_scope(req_scope)
     if eff == SCOPE_ALL:
-        out = rows
-    elif eff == SCOPE_METRO:
-        out = _metrology_scope_filter(rows)
-    elif eff == SCOPE_MY:
-        out = _my_scope_filter(rows)
-    else:
-        out = []
-
-    if is_sector:
-        out = _sector_filter_rows(out, sector, strict=True)
-
-    return out
+        return rows
+    if eff == SCOPE_METRO:
+        return _metrology_scope_filter(rows)
+    if eff == SCOPE_MY:
+        return _my_scope_filter(rows)
+    return []
 
 
 # -------------------- SQLite search helpers --------------------
@@ -1205,12 +1340,19 @@ def _sqlite_build_where(
                 "toc_number", "serial_number",
                 "location",
                 "current_holder", "assigned_to",
+                "sector",
+                ASSET_HOLDER_KEY_COL,
             )
             if c in cols
         ]
+        # user-id holder col is numeric; allow string LIKE fallback only if present (harmless)
+        if ASSET_HOLDER_USER_ID_COL in cols:
+            search_cols.append(f"CAST(COALESCE({ASSET_HOLDER_USER_ID_COL},'') AS TEXT)")
+
         for nc in _NOMENCLATURE_ALIASES:
             if nc in cols and nc not in search_cols:
                 search_cols.append(nc)
+
         if search_cols:
             where.append("(" + " OR ".join([f"{c} LIKE ?" for c in search_cols]) + ")")
             params.extend([like] * len(search_cols))
@@ -1251,9 +1393,9 @@ def create_asset(
     _require_login("assets.create_asset")
     _require_perm(PERM_ASSETS_CREATE, "assets.create_asset")
 
-    # actor param zadržan radi kompatibilnosti, ali audit prati sesiju
     actor_eff = _actor_name_for_audit()
 
+    # compat normalization
     if toc is None and toc_number is not None:
         toc = str(toc_number).strip()
     if serial is None and serial_number is not None:
@@ -1279,11 +1421,15 @@ def create_asset(
         extra_dict[NOMENCLATURE_CANON_KEY] = nom
         extra_dict[NOMENCLATURE_LEGACY_KEY] = nom
 
-    if _current_role() == "SECTOR_ADMIN":
-        sec = _current_sector()
-        if not sec:
-            raise PermissionError("SECTOR_ADMIN nema definisan sektor u sesiji (fail-closed).")
-        extra_dict["sector"] = sec
+    # Sector assignment policy:
+    # - ako security scope nije ALL (non-admin), sektor uzimamo iz sesije (ignorišemo UI).
+    sec_scope = _security_scope_policy()
+    if sec_scope in ("SECTOR", "MY") and not _is_global_admin_like():
+        sec = _require_sector("assets.create_asset")
+        extra_dict["sector"] = _norm_sector(sec)
+    else:
+        if "sector" in extra_dict:
+            extra_dict["sector"] = _norm_sector(extra_dict.get("sector"))
 
     if _db_create_asset is None:
         raise RuntimeError(
@@ -1314,27 +1460,30 @@ def list_assets(
     category: str = "SVE",
     status: str = "SVE",
     limit: int = 5000,
-    scope: Any = "",                        # ✅ UI scope switch
-    metrology_only: Optional[bool] = None,  # ✅ kompat (True => METRO)
+    scope: Any = "",
+    metrology_only: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Vraća listu sredstava uz FAIL-CLOSED RBAC i scope.
-    - Ako scope nije zadat: stara precedenca (FULL->METRO->MY).
-    - metrology_only=True -> forsira METRO i pokušava DB filter.
+    FAIL-CLOSED pipeline:
+    1) login + RBAC
+    2) fetch (core.db ili sqlite fallback)
+    3) normalize + nomen enrichment
+    4) security scope (ALL/SECTOR/MY)
+    5) requested scope (UI narrowing: ALL/MY/METRO)
     """
+    _require_login("assets.list_assets")
     _require_perm_any(_ASSETS_LIST_PERMS, "assets.list_assets")
 
     final_q = (q or "").strip() or (search or "").strip()
     lim = _clamp_limit(limit, 5000)
 
-    eff_scope = scope
+    req_scope = scope
     if metrology_only is True:
-        eff_scope = SCOPE_METRO
+        req_scope = SCOPE_METRO
 
-    eff = _choose_effective_scope(eff_scope)
-    want_metro_only = (eff == SCOPE_METRO)
+    want_metro_requested = (_choose_requested_scope(req_scope) == SCOPE_METRO)
 
-    # pokušaj DB sloj (core.db)
+    rows: List[Dict[str, Any]] = []
     if _db_list_assets is not None:
         payload = dict(
             q=final_q,
@@ -1342,14 +1491,13 @@ def list_assets(
             category=(category or "SVE"),
             status=(status or "SVE"),
             limit=lim,
-            sector=_current_sector() if _is_sector_scoped_metro() else "SVE",
-            metrology_only=bool(want_metro_only),
+            # DB-level sector filter samo kad smo u SECTOR security scope (perf)
+            sector=_current_sector() if _security_scope_policy() == "SECTOR" else "SVE",
+            metrology_only=bool(want_metro_requested),
         )
-
         try:
             res = _call_compatible(_db_list_assets, **payload)
         except sqlite3.OperationalError as e:
-            # legacy DB bez kolone: retry bez metrology_only (fail-soft, a filter će se uraditi servisno)
             msg = str(e).lower()
             if "no such column" in msg and "is_metrology" in msg:
                 payload.pop("metrology_only", None)
@@ -1370,53 +1518,56 @@ def list_assets(
         rows = [(_norm_asset_row(r) if isinstance(r, dict) else {}) for r in res]  # type: ignore
         rows = [r for r in rows if isinstance(r, dict) and r]
         rows = _enrich_rows_with_nomen_if_missing(rows)
-        return _apply_list_scope(rows, requested_scope=eff_scope, metrology_only=metrology_only)
+    else:
+        try:
+            rows = _sqlite_list_assets(
+                final_q=final_q,
+                category=category,
+                status=status,
+                limit=lim,
+                metrology_only=bool(want_metro_requested),
+            )
+        except Exception as e:
+            logger.exception("sqlite list_assets failed: %s", e)
+            rows = []
 
-    # sqlite fallback
-    try:
-        rows2 = _sqlite_list_assets(final_q=final_q, category=category, status=status, limit=lim, metrology_only=want_metro_only)
-        return _apply_list_scope(rows2, requested_scope=eff_scope, metrology_only=metrology_only)
-    except Exception as e:
-        logger.exception("sqlite list_assets failed: %s", e)
-        return []
+    rows = _apply_security_scope(rows)
+    rows = _apply_requested_scope(rows, requested_scope=req_scope, metrology_only=metrology_only)
+    return rows
 
 
 def list_assets_brief(
     *,
     limit: int = 1000,
-    scope: Any = "",                         # ✅ UI scope switch radi i za brief
-    metrology_only: Optional[bool] = None,   # ✅ kompat
+    scope: Any = "",
+    metrology_only: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
-    """
-    Brief list (manje kolona), uz FAIL-CLOSED RBAC + scope.
-    metrology_only=True => forsira METRO (ali i dalje RBAC/sector važe).
-    """
+    _require_login("assets.list_assets_brief")
     _require_perm_any(_ASSETS_LIST_PERMS, "assets.list_assets_brief")
     lim = _clamp_limit(limit, 1000)
 
-    eff_scope = scope
+    req_scope = scope
     if metrology_only is True:
-        eff_scope = SCOPE_METRO
+        req_scope = SCOPE_METRO
 
-    eff = _choose_effective_scope(eff_scope)
-    want_metro_only = (eff == SCOPE_METRO)
+    want_metro_requested = (_choose_requested_scope(req_scope) == SCOPE_METRO)
 
+    rows: List[Dict[str, Any]] = []
     if _db_list_assets_brief is not None:
         try:
             res = _call_compatible(
                 _db_list_assets_brief,
                 limit=lim,
-                sector=_current_sector() if _is_sector_scoped_metro() else "SVE",
-                metrology_only=bool(want_metro_only),
+                sector=_current_sector() if _security_scope_policy() == "SECTOR" else "SVE",
+                metrology_only=bool(want_metro_requested),
             )
         except sqlite3.OperationalError as e:
             msg = str(e).lower()
             if "no such column" in msg and "is_metrology" in msg:
-                # retry bez metrology_only (servisni filter)
                 res = _call_compatible(
                     _db_list_assets_brief,
                     limit=lim,
-                    sector=_current_sector() if _is_sector_scoped_metro() else "SVE",
+                    sector=_current_sector() if _security_scope_policy() == "SECTOR" else "SVE",
                 )
             else:
                 logger.exception("core.db.list_assets_brief failed: %s", e)
@@ -1444,26 +1595,39 @@ def list_assets_brief(
             return []
 
     rows = _enrich_rows_with_nomen_if_missing(rows)
-    return _apply_list_scope(rows, requested_scope=eff_scope, metrology_only=metrology_only)
+    rows = _apply_security_scope(rows)
+    rows = _apply_requested_scope(rows, requested_scope=req_scope, metrology_only=metrology_only)
+    return rows
 
 
 def get_asset_by_uid(*, asset_uid: str) -> Optional[Dict[str, Any]]:
+    """
+    Jedno sredstvo uz FAIL-CLOSED:
+    - login + RBAC
+    - view-type guard (FULL/METRO/MY)
+    - security scope guard (ALL/SECTOR/MY)
+    """
+    _require_login("assets.get_asset_by_uid")
     _require_perm_any(_ASSETS_LIST_PERMS, "assets.get_asset_by_uid")
     uid = (asset_uid or "").strip()
     if not uid:
         return None
 
-    sector = _current_sector() if _is_sector_scoped_metro() else ""
-
-    def _enforce_sector(rr: Dict[str, Any]) -> None:
-        if _is_sector_scoped_metro() and (not _has_full_assets_view()):
-            if _has_my_assets_view() and _is_my_scope_asset(rr):
-                return
-            if not sector:
-                raise PermissionError("Nemaš definisan sektor u sesiji (sector-scope je fail-closed).")
-            a_sec = _asset_sector_value(rr)
-            if (not a_sec) or (not _sector_eq(a_sec, sector)):
+    def _security_one(rr: Dict[str, Any]) -> None:
+        sec_scope = _security_scope_policy()
+        if sec_scope == "ALL":
+            return
+        if sec_scope == "SECTOR":
+            sec = _require_sector("assets.get_asset_by_uid")
+            asec = _asset_sector_value(rr)
+            if (not asec) or (not _sector_eq(asec, sec)):
                 raise PermissionError("Nemaš pravo da vidiš sredstvo van svog sektora.")
+            return
+        if sec_scope == "MY":
+            if not _is_my_scope_asset_dbfirst(rr):
+                raise PermissionError("Nemaš pravo da vidiš sredstvo van MY scope (moja zaduženja).")
+            return
+        raise PermissionError("Scope nije validan (fail-closed).")
 
     if _db_get_asset_by_uid is not None:
         try:
@@ -1473,10 +1637,9 @@ def get_asset_by_uid(*, asset_uid: str) -> Optional[Dict[str, Any]]:
             r = None
 
         if isinstance(r, dict):
-            rr = _enforce_scope_one(_norm_asset_row(r))
-            if rr is None:
-                return None
-            _enforce_sector(rr)
+            rr = _norm_asset_row(r)
+            _enforce_view_perms_one(rr)
+            _security_one(rr)
             rr2 = _enrich_rows_with_nomen_if_missing([rr])
             return rr2[0] if rr2 else rr
         return None
@@ -1490,10 +1653,9 @@ def get_asset_by_uid(*, asset_uid: str) -> Optional[Dict[str, Any]]:
             rows = _sqlite_select_assets_basic(conn, limit=1, where_sql="asset_uid=?", params=(uid,))
             if not rows:
                 return None
-            rr = _enforce_scope_one(_norm_asset_row(rows[0]))
-            if rr is None:
-                return None
-            _enforce_sector(rr)
+            rr = _norm_asset_row(rows[0])
+            _enforce_view_perms_one(rr)
+            _security_one(rr)
             rr2 = _enrich_rows_with_nomen_if_missing([rr])
             return rr2[0] if rr2 else rr
     except PermissionError:
@@ -1511,16 +1673,141 @@ def list_assets_my(
     status: str = "SVE",
     limit: int = 5000,
 ) -> List[Dict[str, Any]]:
-    """
-    Kompatibilni API: MY list.
-    Interno koristi list_assets + MY scope.
-    """
     _require_login("assets.list_assets_my")
     _require_perm_any([PERM_ASSETS_VIEW, PERM_ASSETS_MY_VIEW], "assets.list_assets_my")
     return list_assets(q=q, search=search, category=category, status=status, limit=limit, scope=SCOPE_MY)
 
 
-# alias (kompatibilnost)
 list_assets_my_brief = list_assets_my
 
-# (FILENAME: services/assets_service.py - END PART 3/3)
+
+# -------------------- Disposal workflow (service wrappers) --------------------
+def _disposal_case_asset_uid(disposal_id: int) -> str:
+    """
+    Minimal helper da enforce-ujemo scope kod approve/cancel/dispose.
+    Fail-closed: ako ne možemo da nađemo case -> error.
+    """
+    did = int(disposal_id or 0)
+    if did <= 0:
+        raise ValueError("disposal_id must be > 0")
+
+    # Prefer sqlite direct (core.db nema read helper u ovom trenutku).
+    try:
+        with _sqlite_conn() as conn:
+            if not _sqlite_table_exists(conn, "disposal_cases"):
+                raise RuntimeError("disposal_cases tabela ne postoji (schema nije migrirana).")
+            cur = conn.execute(
+                "SELECT asset_uid FROM disposal_cases WHERE disposal_id=? LIMIT 1;",
+                (did,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("disposal case not found")
+            uid = str(row[0] if isinstance(row, (tuple, list)) else row["asset_uid"]).strip()  # type: ignore[index]
+            if not uid:
+                raise RuntimeError("disposal case has empty asset_uid")
+            return uid
+    except PermissionError:
+        raise
+    except Exception as e:
+        raise RuntimeError(str(e)) from e
+
+
+def prepare_disposal(
+    *,
+    asset_uid: str,
+    reason: str = "",
+    notes: str = "",
+    data: Optional[Dict[str, Any]] = None,
+    source: str = "assets_service.prepare_disposal",
+) -> int:
+    _require_login("assets.prepare_disposal")
+    _require_perm(PERM_DISPOSAL_PREPARE, "assets.prepare_disposal")
+
+    # enforce access to asset (RBAC + security scope)
+    _ = get_asset_by_uid(asset_uid=asset_uid)
+
+    if _db_prepare_disposal is None:
+        raise RuntimeError("DB funkcija prepare_disposal_db nije dostupna (core.db).")
+
+    return int(_call_compatible(
+        _db_prepare_disposal,
+        actor=_actor_name_for_audit(),
+        asset_uid=(asset_uid or "").strip(),
+        reason=(reason or "").strip(),
+        notes=(notes or "").strip(),
+        data_obj=(data or None),
+        source=(source or "").strip(),
+    ))
+
+
+def approve_disposal(
+    *,
+    disposal_id: int,
+    source: str = "assets_service.approve_disposal",
+) -> None:
+    _require_login("assets.approve_disposal")
+    _require_perm(PERM_DISPOSAL_APPROVE, "assets.approve_disposal")
+
+    if _db_approve_disposal is None:
+        raise RuntimeError("DB funkcija approve_disposal_db nije dostupna (core.db).")
+
+    uid = _disposal_case_asset_uid(int(disposal_id))
+    _ = get_asset_by_uid(asset_uid=uid)
+
+    _call_compatible(
+        _db_approve_disposal,
+        actor=_actor_name_for_audit(),
+        disposal_id=int(disposal_id),
+        source=(source or "").strip(),
+    )
+
+
+def cancel_disposal(
+    *,
+    disposal_id: int,
+    reason: str = "",
+    source: str = "assets_service.cancel_disposal",
+) -> None:
+    _require_login("assets.cancel_disposal")
+    _require_perm(PERM_DISPOSAL_PREPARE, "assets.cancel_disposal")
+
+    if _db_cancel_disposal is None:
+        raise RuntimeError("DB funkcija cancel_disposal_db nije dostupna (core.db).")
+
+    uid = _disposal_case_asset_uid(int(disposal_id))
+    _ = get_asset_by_uid(asset_uid=uid)
+
+    _call_compatible(
+        _db_cancel_disposal,
+        actor=_actor_name_for_audit(),
+        disposal_id=int(disposal_id),
+        reason=(reason or "").strip(),
+        source=(source or "").strip(),
+    )
+
+
+def dispose_from_case(
+    *,
+    disposal_id: int,
+    disposed_doc_no: str = "",
+    source: str = "assets_service.dispose_from_case",
+) -> None:
+    _require_login("assets.dispose_from_case")
+    _require_perm(PERM_DISPOSAL_DISPOSE, "assets.dispose_from_case")
+
+    if _db_dispose_from_case is None:
+        raise RuntimeError("DB funkcija dispose_from_case_db nije dostupna (core.db).")
+
+    uid = _disposal_case_asset_uid(int(disposal_id))
+    _ = get_asset_by_uid(asset_uid=uid)
+
+    _call_compatible(
+        _db_dispose_from_case,
+        actor=_actor_name_for_audit(),
+        disposal_id=int(disposal_id),
+        disposed_doc_no=(disposed_doc_no or "").strip(),
+        source=(source or "").strip(),
+    )
+
+# (FILENAME: services/assets_service.py - END PART 2/2)

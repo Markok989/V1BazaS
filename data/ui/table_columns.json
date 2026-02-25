@@ -751,5 +751,49 @@
       "cert_no": 160,
       "updated_at": 150
     }
+  },
+  "assets_table_v11": {
+    "order": [
+      "rownum",
+      "asset_uid",
+      "toc_number",
+      "nomenclature_no",
+      "serial_number",
+      "name",
+      "category",
+      "status",
+      "current_holder",
+      "location",
+      "updated_at",
+      "sector"
+    ],
+    "visible": {
+      "rownum": true,
+      "asset_uid": true,
+      "toc_number": true,
+      "nomenclature_no": true,
+      "serial_number": true,
+      "name": true,
+      "category": true,
+      "status": true,
+      "current_holder": true,
+      "location": true,
+      "updated_at": true,
+      "sector": true
+    },
+    "widths": {
+      "rownum": 60,
+      "asset_uid": 160,
+      "toc_number": 120,
+      "nomenclature_no": 150,
+      "serial_number": 140,
+      "name": 260,
+      "category": 140,
+      "status": 120,
+      "current_holder": 160,
+      "location": 160,
+      "updated_at": 150,
+      "sector": 120
+    }
   }
 }

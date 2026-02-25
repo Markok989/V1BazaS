@@ -17,6 +17,11 @@ Senior patch (stabilnost/UX):
 - FIX: Row tint accent traka prati prvu VIDLJIVU kolonu (posle reorder/hide).
 - Stabilnost: fail-soft importi, guard-ovi, ne ruši UI ako helper nije tu.
 - NEW (compat): priprema za "scope-aware" service call (ako list_assets podrži scope/actor/sector u potpisu).
+
+Patch (2026-02-26):
+- FIX: fatal crash kada metoda _on_reload_timeout nije vidljiva (indent/copy-paste) — safe-connect fallback na load_assets().
+- UX: dodata kolona "Sektor" u tabeli + u preview panelu (bez promene postojećih indeksa).
+- Compat: bump wire_columns key na v11 da se stari layout ne sudara sa novom kolonom.
 """
 
 from __future__ import annotations
@@ -166,7 +171,6 @@ def _actor_sector_id() -> Optional[int]:
                 try:
                     return int(v)
                 except Exception:
-                    # ponekad je "S2" ili slično; to rešavamo kasnije u servisima
                     return None
     except Exception:
         return None
@@ -280,6 +284,14 @@ def _row_as_dict(r: Any) -> Dict[str, Any]:
 
 def _get_nomenclature(r: Dict[str, Any]) -> str:
     for k in ("nomenclature_no", "nomenclature_number", "nomenklaturni_broj", "nom_broj", "nom_no", "nomen"):
+        v = _norm((r or {}).get(k, ""))
+        if v:
+            return v
+    return ""
+
+
+def _get_sector(r: Dict[str, Any]) -> str:
+    for k in ("sector", "sektor", "org_unit", "unit", "department", "dept", "sector_code", "sector_id"):
         v = _norm((r or {}).get(k, ""))
         if v:
             return v
@@ -539,7 +551,7 @@ class AssetPreviewPanel(QFrame):
 
         self._collapsed = False
         self._cw = 64
-        self._ew = 340
+        self._ew = 360
         self._uid = ""
 
         self._open: Optional[Callable[[], None]] = None
@@ -580,6 +592,7 @@ class AssetPreviewPanel(QFrame):
             ("status", "Status:"),
             ("current_holder", "Zaduženo kod:"),
             ("location", "Lokacija:"),
+            ("sector", "Sektor:"),
             ("updated_at", "Ažurirano:"),
         ]:
             _add(k, lbl)
@@ -717,6 +730,7 @@ class AssetPreviewPanel(QFrame):
         for k in ("serial_number", "name", "category", "status", "current_holder", "location"):
             _set(k, r.get(k, ""))
 
+        _set("sector", _get_sector(r))
         _set("updated_at", fmt_dt_sr(r.get("updated_at", "")))
 
         try:
@@ -752,6 +766,7 @@ class AssetsPage(QWidget):
         "Asset UID", "TOC", "Nomenkl. broj", "Serijski",
         "Naziv", "Kategorija", "Status",
         "Zaduženo kod", "Lokacija", "Ažurirano",
+        "Sektor",
     ]
 
     COL_IDX_ROWNUM = 0
@@ -765,6 +780,7 @@ class AssetsPage(QWidget):
     COL_IDX_HOLDER = 8
     COL_IDX_LOC = 9
     COL_IDX_UPD = 10
+    COL_IDX_SECTOR = 11
 
     TAB_ACTIVE = "Aktivna"
     TAB_UNASSIGNED = "Bez zaduženja"
@@ -797,7 +813,7 @@ class AssetsPage(QWidget):
         self.logger = logger or logging.getLogger(__name__)
 
         # wire_columns storage key (bitno za reset kolona)
-        self._cols_key = "assets_table_v10"
+        self._cols_key = "assets_table_v11"
 
         # RBAC flags
         self._has_any_view = False
@@ -840,7 +856,16 @@ class AssetsPage(QWidget):
         self._reload_timer = QTimer(self)
         self._reload_timer.setSingleShot(True)
         self._reload_timer.setInterval(180)
-        self._reload_timer.timeout.connect(self._on_reload_timeout)
+
+        # ✅ CRASH-PROOF: safe-connect (fallback na load_assets)
+        try:
+            _handler = getattr(self, "_on_reload_timeout", None)
+            self._reload_timer.timeout.connect(_handler if callable(_handler) else self.load_assets)
+        except Exception:
+            try:
+                self._reload_timer.timeout.connect(self.load_assets)
+            except Exception:
+                pass
 
         self._persist_timer = QTimer(self)
         self._persist_timer.setSingleShot(True)
@@ -864,6 +889,7 @@ class AssetsPage(QWidget):
             ColSpec("current_holder", "Zaduženo kod", True, 160),
             ColSpec("location", "Lokacija", True, 160),
             ColSpec("updated_at", "Ažurirano", True, 150),
+            ColSpec("sector", "Sektor", True, 120),
         ]
 
         # ---- UI ----
@@ -982,7 +1008,8 @@ class AssetsPage(QWidget):
                     default_sort_enabled=True,
                     filter_columns=[
                         self.COL_IDX_UID, self.COL_IDX_TOC, self.COL_IDX_NOM, self.COL_IDX_SN,
-                        self.COL_IDX_NAME, self.COL_IDX_CAT, self.COL_IDX_STATUS, self.COL_IDX_HOLDER, self.COL_IDX_LOC,
+                        self.COL_IDX_NAME, self.COL_IDX_CAT, self.COL_IDX_STATUS, self.COL_IDX_HOLDER,
+                        self.COL_IDX_LOC, self.COL_IDX_SECTOR,
                     ],
                 ),
                 parent=self,
@@ -1107,6 +1134,7 @@ class AssetsPage(QWidget):
             self.request_reload()
 
 # (FILENAME: ui/assets_page.py - END PART 1/3)
+# FILENAME: ui/assets_page.py
 
 # FILENAME: ui/assets_page.py
 # (FILENAME: ui/assets_page.py - START PART 2/3)
@@ -1426,7 +1454,6 @@ class AssetsPage(QWidget):
             if self._has_metro_view:
                 self.cb_scope.addItem(self.SCOPE_METRO)
             if self.cb_scope.count() == 0:
-                # fail-soft: UI ima bar nešto, ali realno nema view perms
                 self.cb_scope.addItem(self.SCOPE_MY)
         finally:
             try:
@@ -1596,6 +1623,7 @@ class AssetsPage(QWidget):
             "current_holder": _txt(self.COL_IDX_HOLDER),
             "location": _txt(self.COL_IDX_LOC),
             "updated_at": _txt(self.COL_IDX_UPD),
+            "sector": _txt(self.COL_IDX_SECTOR),
         }
 
     def _on_selection_changed(self) -> None:
@@ -1720,6 +1748,7 @@ class AssetsPage(QWidget):
                     rr.get("status", ""),
                     rr.get("current_holder", ""),
                     rr.get("location", ""),
+                    _get_sector(rr),
                 ]
                 return " ".join(str(x or "") for x in parts).casefold()
 
@@ -2039,6 +2068,10 @@ class AssetsPage(QWidget):
 
     # -------------------- reload debounce --------------------
     def _on_reload_timeout(self) -> None:
+        """
+        Centralni handler za timer timeout.
+        Postoji zbog starijih app.py connect-a i radi kao stabilna "jedna istina".
+        """
         try:
             self.load_assets()
         except Exception:
@@ -2206,7 +2239,6 @@ class AssetsPage(QWidget):
             try:
                 return list_assets(**kwargs) or []
             except Exception:
-                # ako servis ima svoj interni strict, probaj "minimalni set"
                 pass
 
         filtered: Dict[str, Any] = {}
@@ -2214,7 +2246,6 @@ class AssetsPage(QWidget):
             if k in supported:
                 filtered[k] = v
 
-        # minimalni "compat" poziv
         return list_assets(**filtered) or []
 
     def load_assets(self) -> None:
@@ -2265,9 +2296,6 @@ class AssetsPage(QWidget):
             pass
 
         try:
-            # --- future-proof args (service-level filtering should be added in services) ---
-            # UI scope filter is NOT security boundary. We still pass "scope" info if service supports it.
-            # Actor is never taken from UI input (only from session).
             actor_name = _actor_name()
             actor_key = _actor_key()
             sector_id = _actor_sector_id()
@@ -2383,6 +2411,12 @@ class AssetsPage(QWidget):
                     it_loc = QTableWidgetItem(_norm(r.get("location", "")))
                     it_loc.setFlags(it_loc.flags() & ~Qt.ItemIsEditable)
                     self.table.setItem(i, self.COL_IDX_LOC, it_loc)
+
+                    # ✅ NOVO: sektor kolona (ako je Part 1 patch primenjen)
+                    sec = _get_sector(r)  # helper je u Part 1 patch-u
+                    it_sec = QTableWidgetItem(_norm(sec))
+                    it_sec.setFlags(it_sec.flags() & ~Qt.ItemIsEditable)
+                    self.table.setItem(i, self.COL_IDX_SECTOR, it_sec)
 
                     raw_upd = r.get("updated_at", "") or ""
                     disp_upd = fmt_dt_sr(raw_upd)
@@ -2629,4 +2663,4 @@ class AssetsPage(QWidget):
         self.request_reload()
 
 # (FILENAME: ui/assets_page.py - END PART 3/3)
-# FILENAME: ui/assets_page.py
+# END FILENAME: ui/assets_page.py

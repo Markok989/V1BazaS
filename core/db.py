@@ -1,42 +1,33 @@
 # FILENAME: core/db.py
-# (FILENAME: core/db.py - START PART 1/4)
+# (FILENAME: core/db.py - START PART 1/3)
 # -*- coding: utf-8 -*-
 """
 BazaS2 (offline) — core/db.py
 
 - SQLite konekcija + stabilne pragme
 - Migracije (schema_version)
-- Audit log
-- asset_uid generator
+- Audit log (FAIL-SOFT: nikad ne ruši app)
+- asset_uid generator + RB generator
 - Assets CRUD (V1)
 - Assignments (V1)
 - Audit read (po entitetu i globalno)
+- Asset timeline (asset_events)
 
-NOVO:
+NOVO/RELEVANTNO:
 - assets.sector, assets.is_metrology
-- assets.rb + asset_rb_seq (stabilan redni broj)
-- asset_events (timeline)
+- assets.rb + asset_rb_seq
+- assets.nomenclature_number (nomenklaturni broj)
+- disposal_cases (Priprema za rashod) — 2-step rashod (prepare -> approve -> dispose)
 
-PATCH (bitno):
-- db_conn() context manager koji UVEK zatvara sqlite konekciju
-  (sqlite3.Connection kao context manager NE zatvara konekciju).
-
-DODATO (2026-02):
-- assets.nomenclature_number (nomenklaturni broj) — TEXT, nije unique
-- migration v7 (ALTER TABLE + index)
-
-REV (2026-02-12+):
-- Uklonjen dupli __future__ import (mora biti samo jednom i pri vrhu)
-- Fajl je jedan (nema "PART 2" mini-headera)
-- init_db stabilizovan (commit i kad nema migracija)
-- Audit write fail-safe i za ne-JSON objekte
-- Minimalna zaštita identifikatora (table/col) protiv SQL foot-gun
-- Clamp limit vrednosti (za list_* upite)
-- Kompatibilni aliasi ostaju
-
-Hardening (2026-02-22):
-- Migration v1: UNIQUE TOC index pravi se best-effort (ne ruši app ako legacy DB ima duplikate).
-- Write transakcije: schema ensure ide pre BEGIN IMMEDIATE (manje lock contention-a).
+Hardening REV (2026-02-26):
+- FIX: _add_column_best_effort koristi ident-guard i uklanja NOT NULL bez DEFAULT (SQLite foot-gun).
+- FIX: audit init više ne zavisi od assets migracije (minimalan audit schema).
+- NEW (v9): user-id fields za MY scope bez string-match:
+    - assets.current_holder_user_id, assets.current_holder_key
+    - assignments.actor_user_id, assignments.to_user_id, assignments.from_user_id
+    - assignments.to_holder_key, assignments.from_holder_key
+  Sve je nullable, kompatibilno sa legacy bazama (best-effort).
+- Compat: list_* wrapperi prihvataju “višak” parametara bez pucanja.
 """
 
 from __future__ import annotations
@@ -69,6 +60,30 @@ except Exception:
 
 NOMENCLATURE_COL = "nomenclature_number"
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# Disposal statuses
+DISPOSAL_STATUS_PREPARED = "PREPARED"
+DISPOSAL_STATUS_APPROVED = "APPROVED"
+DISPOSAL_STATUS_DISPOSED = "DISPOSED"
+DISPOSAL_STATUS_REJECTED = "REJECTED"
+DISPOSAL_STATUS_CANCELLED = "CANCELLED"
+_DISPOSAL_STATUSES = {
+    DISPOSAL_STATUS_PREPARED,
+    DISPOSAL_STATUS_APPROVED,
+    DISPOSAL_STATUS_DISPOSED,
+    DISPOSAL_STATUS_REJECTED,
+    DISPOSAL_STATUS_CANCELLED,
+}
+
+# v9: user-id support (nullable columns; safe for legacy)
+ASSET_HOLDER_USER_ID_COL = "current_holder_user_id"
+ASSET_HOLDER_KEY_COL = "current_holder_key"
+
+ASSIGN_ACTOR_USER_ID_COL = "actor_user_id"
+ASSIGN_TO_USER_ID_COL = "to_user_id"
+ASSIGN_FROM_USER_ID_COL = "from_user_id"
+ASSIGN_TO_HOLDER_KEY_COL = "to_holder_key"
+ASSIGN_FROM_HOLDER_KEY_COL = "from_holder_key"
 
 
 def _is_safe_ident(name: str) -> bool:
@@ -164,6 +179,11 @@ def _apply_pragmas_best_effort(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA synchronous = NORMAL;")
     except Exception:
         pass
+    # optional perf (fail-soft)
+    try:
+        conn.execute("PRAGMA temp_store = MEMORY;")
+    except Exception:
+        pass
 
 
 def connect_db() -> sqlite3.Connection:
@@ -252,7 +272,7 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
 
 
 def _column_exists(conn: sqlite3.Connection, table: str, col: str) -> bool:
-    if not _is_safe_ident(table) or not col:
+    if not _is_safe_ident(table) or not _is_safe_ident(col):
         return False
     if not _table_exists(conn, table):
         return False
@@ -267,6 +287,32 @@ def _column_exists(conn: sqlite3.Connection, table: str, col: str) -> bool:
         except Exception:
             continue
     return False
+
+
+def _add_column_best_effort(conn: sqlite3.Connection, table: str, col: str, decl: str) -> None:
+    """
+    SQLite foot-gun: ALTER TABLE ... ADD COLUMN col TEXT NOT NULL (bez DEFAULT) puca ako tabela ima redove.
+    Zato:
+      - ako decl sadrži NOT NULL a nema DEFAULT -> uklanjamo NOT NULL (fail-soft)
+      - dodajemo kolonu samo ako ne postoji
+    """
+    if not _is_safe_ident(table) or not _is_safe_ident(col):
+        return
+    try:
+        if _column_exists(conn, table, col):
+            return
+    except Exception:
+        return
+
+    d = (decl or "TEXT").strip()
+    dd = d.upper()
+    if "NOT NULL" in dd and "DEFAULT" not in dd:
+        d = re.sub(r"\s+NOT\s+NULL\s*", " ", d, flags=re.IGNORECASE).strip()
+
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {d};")
+    except Exception:
+        pass
 
 
 # =========================
@@ -285,6 +331,29 @@ def _safe_json(obj: Any) -> Optional[str]:
             return None
 
 
+def _ensure_audit_schema(conn: sqlite3.Connection) -> None:
+    """
+    Minimalno obezbeđuje audit_log (bez neželjenih side-effect-ova kao što je stvaranje assets tabele).
+    """
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_time TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                entity TEXT NOT NULL,
+                entity_id TEXT,
+                action TEXT NOT NULL,
+                before_json TEXT,
+                after_json TEXT,
+                source TEXT
+            );
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(event_time);")
+    except Exception:
+        pass
+
+
 def write_audit(
     conn: sqlite3.Connection,
     actor: str,
@@ -298,7 +367,7 @@ def write_audit(
     # Fail-safe: osiguraj da audit_log postoji (ako init_db nije pozvan)
     try:
         if not _table_exists(conn, "audit_log"):
-            _migration_v1(conn)
+            _ensure_audit_schema(conn)
             try:
                 conn.commit()
             except Exception:
@@ -413,21 +482,21 @@ def has_metrology_record_for_asset(asset_uid: str) -> bool:
 def has_metrology_for_asset(asset_uid: str) -> bool:
     return has_metrology_record_for_asset(asset_uid)
 
+# (FILENAME: core/db.py - END PART 1/3)
+
+# FILENAME: core/db.py
+# (FILENAME: core/db.py - START PART 2/3)
 
 # =========================
 # MIGRATIONS
 # =========================
-# (FILENAME: core/db.py - END PART 1/4)
 
-# FILENAME: core/db.py
-# (FILENAME: core/db.py - START PART 2/4)
 def _try_create_assets_toc_unique_index(conn: sqlite3.Connection) -> None:
     """
     Best-effort: UNIQUE TOC index.
     Legacy baze mogu već imati duplikate -> UNIQUE index pada.
     Ne rušimo app, ali ostavljamo signal u logu.
     """
-    # Partial unique index: enforce uniqueness only for non-empty values
     sql = """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_toc_unique ON assets(toc_number)
             WHERE toc_number IS NOT NULL AND toc_number <> '';
@@ -439,7 +508,6 @@ def _try_create_assets_toc_unique_index(conn: sqlite3.Connection) -> None:
             log.warning("TOC unique index not created (legacy duplicates?) — continuing. (%s)", e)
         except Exception:
             pass
-        # fallback non-unique index for performance (best-effort)
         try:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_toc ON assets(toc_number);")
         except Exception:
@@ -447,7 +515,6 @@ def _try_create_assets_toc_unique_index(conn: sqlite3.Connection) -> None:
 
 
 def _migration_v1(conn: sqlite3.Connection) -> None:
-    # NOTE: UNIQUE idx_assets_toc_unique se pravi best-effort posle executescript-a (vidi helper gore)
     conn.executescript(f"""
         CREATE TABLE IF NOT EXISTS assets (
             asset_uid TEXT PRIMARY KEY,
@@ -495,7 +562,7 @@ def _migration_v1(conn: sqlite3.Connection) -> None:
 
 def _migration_v2(conn: sqlite3.Connection) -> None:
     if not _column_exists(conn, "assets", "current_holder"):
-        conn.execute("ALTER TABLE assets ADD COLUMN current_holder TEXT;")
+        _add_column_best_effort(conn, "assets", "current_holder", "TEXT")
 
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS assignments (
@@ -516,17 +583,22 @@ def _migration_v2(conn: sqlite3.Connection) -> None:
 
 
 def _migration_v3(conn: sqlite3.Connection) -> None:
+    """
+    Legacy-hardening za assignments:
+    - Ne pokušavamo da dodamo NOT NULL kolone preko ALTER TABLE bez DEFAULT (SQLite puca).
+    - Dodajemo kao nullable, pa best-effort backfill.
+    """
     if not _column_exists(conn, "assets", "current_holder"):
-        conn.execute("ALTER TABLE assets ADD COLUMN current_holder TEXT;")
+        _add_column_best_effort(conn, "assets", "current_holder", "TEXT")
 
     if not _table_exists(conn, "assignments"):
         _migration_v2(conn)
         return
 
     required_cols = [
-        ("created_at", "TEXT NOT NULL"),
-        ("asset_uid", "TEXT NOT NULL"),
-        ("action", "TEXT NOT NULL"),
+        ("created_at", "TEXT"),
+        ("asset_uid", "TEXT"),
+        ("action", "TEXT"),
         ("from_holder", "TEXT"),
         ("to_holder", "TEXT"),
         ("from_location", "TEXT"),
@@ -535,18 +607,31 @@ def _migration_v3(conn: sqlite3.Connection) -> None:
     ]
     for col, decl in required_cols:
         if not _column_exists(conn, "assignments", col):
-            conn.execute(f"ALTER TABLE assignments ADD COLUMN {col} {decl};")
+            _add_column_best_effort(conn, "assignments", col, decl)
 
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_assignments_asset ON assignments(asset_uid);")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_assignments_time ON assignments(created_at);")
+    try:
+        now = _now_iso()
+        if _column_exists(conn, "assignments", "created_at"):
+            conn.execute("UPDATE assignments SET created_at=? WHERE created_at IS NULL OR TRIM(created_at)='';", (now,))
+    except Exception:
+        pass
+
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_assignments_asset ON assignments(asset_uid);")
+    except Exception:
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_assignments_time ON assignments(created_at);")
+    except Exception:
+        pass
 
 
 def _migration_v4(conn: sqlite3.Connection) -> None:
     if not _column_exists(conn, "assets", "sector"):
-        conn.execute("ALTER TABLE assets ADD COLUMN sector TEXT;")
+        _add_column_best_effort(conn, "assets", "sector", "TEXT")
 
     if not _column_exists(conn, "assets", "is_metrology"):
-        conn.execute("ALTER TABLE assets ADD COLUMN is_metrology INTEGER NOT NULL DEFAULT 0;")
+        _add_column_best_effort(conn, "assets", "is_metrology", "INTEGER NOT NULL DEFAULT 0")
 
     try:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_sector ON assets(sector);")
@@ -557,7 +642,6 @@ def _migration_v4(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
-    # Best-effort: ensure TOC unique index exists when possible
     try:
         _try_create_assets_toc_unique_index(conn)
     except Exception:
@@ -572,7 +656,7 @@ def _migration_v5(conn: sqlite3.Connection) -> None:
             pass
 
     if not _column_exists(conn, "assets", "rb"):
-        conn.execute("ALTER TABLE assets ADD COLUMN rb INTEGER;")
+        _add_column_best_effort(conn, "assets", "rb", "INTEGER")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS asset_rb_seq (
@@ -612,7 +696,6 @@ def _migration_v5(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
     try:
-        # Ako postoje duplikati iz legacy baze, unique index može da padne — ne rušimo aplikaciju.
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_rb_unique ON assets(rb);")
     except Exception:
         pass
@@ -657,7 +740,7 @@ def _migration_v7(conn: sqlite3.Connection) -> None:
 
     try:
         if not _column_exists(conn, "assets", NOMENCLATURE_COL):
-            conn.execute(f"ALTER TABLE assets ADD COLUMN {NOMENCLATURE_COL} TEXT;")
+            _add_column_best_effort(conn, "assets", NOMENCLATURE_COL, "TEXT")
     except Exception:
         pass
 
@@ -666,9 +749,121 @@ def _migration_v7(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
-    # Best-effort: ensure TOC unique index exists when possible
     try:
         _try_create_assets_toc_unique_index(conn)
+    except Exception:
+        pass
+
+
+def _migration_v8(conn: sqlite3.Connection) -> None:
+    """
+    Priprema za rashod (2-step):
+      PREPARED -> (APPROVED) -> DISPOSED
+    """
+    try:
+        _migration_v1(conn)
+        _migration_v4(conn)
+        _migration_v5(conn)
+        _migration_v6(conn)
+        _migration_v7(conn)
+    except Exception:
+        pass
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS disposal_cases (
+            disposal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            asset_uid TEXT NOT NULL,
+            status TEXT NOT NULL,
+            prepared_by TEXT NOT NULL,
+            reason TEXT,
+            notes TEXT,
+            approved_by TEXT,
+            approved_at TEXT,
+            disposed_by TEXT,
+            disposed_at TEXT,
+            disposed_doc_no TEXT,
+            data_json TEXT,
+            source TEXT,
+            FOREIGN KEY (asset_uid) REFERENCES assets(asset_uid) ON DELETE CASCADE
+        );
+    """)
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_disposal_asset ON disposal_cases(asset_uid);")
+    except Exception:
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_disposal_status ON disposal_cases(status);")
+    except Exception:
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_disposal_time ON disposal_cases(created_at);")
+    except Exception:
+        pass
+
+    try:
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_disposal_open_unique
+            ON disposal_cases(asset_uid)
+            WHERE status IN ('PREPARED','APPROVED');
+        """)
+    except Exception:
+        pass
+
+
+def _migration_v9(conn: sqlite3.Connection) -> None:
+    """
+    User-ID fields za sigurniji MY scope (bez string match-a):
+    - assets.current_holder_user_id, assets.current_holder_key
+    - assignments.actor_user_id, assignments.to_user_id, assignments.from_user_id
+    - assignments.to_holder_key, assignments.from_holder_key
+    Sve nullable, pa je bezbedno za legacy.
+    """
+    # Ensure base tables exist
+    try:
+        _migration_v1(conn)
+        _migration_v2(conn)
+        _migration_v3(conn)
+    except Exception:
+        pass
+
+    # assets
+    _add_column_best_effort(conn, "assets", ASSET_HOLDER_USER_ID_COL, "INTEGER")
+    _add_column_best_effort(conn, "assets", ASSET_HOLDER_KEY_COL, "TEXT")
+    try:
+        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_assets_holder_uid ON assets({ASSET_HOLDER_USER_ID_COL});")
+    except Exception:
+        pass
+    try:
+        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_assets_holder_key ON assets({ASSET_HOLDER_KEY_COL});")
+    except Exception:
+        pass
+
+    # assignments
+    _add_column_best_effort(conn, "assignments", ASSIGN_ACTOR_USER_ID_COL, "INTEGER")
+    _add_column_best_effort(conn, "assignments", ASSIGN_TO_USER_ID_COL, "INTEGER")
+    _add_column_best_effort(conn, "assignments", ASSIGN_FROM_USER_ID_COL, "INTEGER")
+    _add_column_best_effort(conn, "assignments", ASSIGN_TO_HOLDER_KEY_COL, "TEXT")
+    _add_column_best_effort(conn, "assignments", ASSIGN_FROM_HOLDER_KEY_COL, "TEXT")
+
+    try:
+        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_assign_actor_uid ON assignments({ASSIGN_ACTOR_USER_ID_COL});")
+    except Exception:
+        pass
+    try:
+        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_assign_to_uid ON assignments({ASSIGN_TO_USER_ID_COL});")
+    except Exception:
+        pass
+    try:
+        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_assign_from_uid ON assignments({ASSIGN_FROM_USER_ID_COL});")
+    except Exception:
+        pass
+    try:
+        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_assign_to_key ON assignments({ASSIGN_TO_HOLDER_KEY_COL});")
+    except Exception:
+        pass
+    try:
+        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_assign_from_key ON assignments({ASSIGN_FROM_HOLDER_KEY_COL});")
     except Exception:
         pass
 
@@ -680,7 +875,9 @@ MIGRATIONS: List[Tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (4, _migration_v4),
     (5, _migration_v5),
     (6, _migration_v6),
-    (7, _migration_v7),  # ✅ nomenklaturni broj
+    (7, _migration_v7),
+    (8, _migration_v8),
+    (9, _migration_v9),  # ✅ user-id tracking
 ]
 
 
@@ -734,7 +931,6 @@ def generate_asset_uid(conn: sqlite3.Connection, prefix: str = "A") -> str:
 
 
 def generate_asset_rb(conn: sqlite3.Connection) -> int:
-    # fail-safe: obezbedi rb
     try:
         _migration_v5(conn)
     except Exception:
@@ -764,7 +960,6 @@ def generate_asset_rb(conn: sqlite3.Connection) -> int:
 # =========================
 
 def _begin_immediate(conn: sqlite3.Connection) -> None:
-    """Pokušaj da podigneš write-lock rano (stabilnije pod opterećenjem)."""
     try:
         conn.execute("BEGIN IMMEDIATE;")
     except Exception:
@@ -785,13 +980,24 @@ def _rollback_quiet(conn: sqlite3.Connection) -> None:
         pass
 
 
-def _ensure_schema_for_assets(conn: sqlite3.Connection, *, with_events: bool = False, with_rb: bool = False) -> None:
+def _ensure_schema_for_assets(
+    conn: sqlite3.Connection,
+    *,
+    with_events: bool = False,
+    with_rb: bool = False,
+    with_disposal: bool = False,
+    with_user_ids: bool = False,
+) -> None:
     """
-    Fail-safe schema za assets (i opciono events/rb).
-    Ne menja logiku, samo sprečava 'no such table/column' edge-case kad init_db nije pozvan.
+    Fail-safe schema za assets (i opciono events/rb/disposal/user-ids).
+    Sprečava 'no such table/column' edge-case kad init_db nije pozvan.
     """
     try:
         _migration_v1(conn)
+    except Exception:
+        pass
+    try:
+        _migration_v4(conn)
     except Exception:
         pass
     if with_rb:
@@ -808,15 +1014,33 @@ def _ensure_schema_for_assets(conn: sqlite3.Connection, *, with_events: bool = F
         _migration_v7(conn)
     except Exception:
         pass
+    if with_disposal:
+        try:
+            _migration_v8(conn)
+        except Exception:
+            pass
+    if with_user_ids:
+        try:
+            _migration_v9(conn)
+        except Exception:
+            pass
 
 
-def _ensure_schema_for_assignments(conn: sqlite3.Connection) -> None:
+def _ensure_schema_for_assignments(conn: sqlite3.Connection, *, with_user_ids: bool = False) -> None:
     try:
         _migration_v1(conn)
     except Exception:
         pass
     try:
         _migration_v2(conn)
+    except Exception:
+        pass
+    try:
+        _migration_v3(conn)
+    except Exception:
+        pass
+    try:
+        _migration_v4(conn)
     except Exception:
         pass
     try:
@@ -831,16 +1055,32 @@ def _ensure_schema_for_assignments(conn: sqlite3.Connection) -> None:
         _migration_v7(conn)
     except Exception:
         pass
+    try:
+        _migration_v8(conn)
+    except Exception:
+        pass
+    if with_user_ids:
+        try:
+            _migration_v9(conn)
+        except Exception:
+            pass
 
+
+def _ensure_schema_for_disposal(conn: sqlite3.Connection) -> None:
+    try:
+        _ensure_schema_for_assets(conn, with_events=True, with_rb=True, with_disposal=True, with_user_ids=True)
+    except Exception:
+        pass
+
+# (FILENAME: core/db.py - END PART 2/3)
+
+# FILENAME: core/db.py
+# (FILENAME: core/db.py - START PART 3/3)
 
 # =========================
 # ASSETS (DB)
 # =========================
-# (FILENAME: core/db.py - END PART 2/4)
 
-
-# FILENAME: core/db.py
-# (FILENAME: core/db.py - START PART 3/4)
 def create_asset_db(
     actor: str,
     name: str,
@@ -865,10 +1105,9 @@ def create_asset_db(
         raise ValueError(f"status must be one of: {sorted(allowed_status)}")
 
     with db_conn() as conn:
-        # fail-safe schema pre lock-a (manje contention-a)
-        _ensure_schema_for_assets(conn, with_events=True, with_rb=True)
+        # fail-safe schema pre lock-a
+        _ensure_schema_for_assets(conn, with_events=True, with_rb=True, with_disposal=True, with_user_ids=True)
         _commit_quiet(conn)
-
         _begin_immediate(conn)
 
         try:
@@ -883,8 +1122,9 @@ def create_asset_db(
                 INSERT INTO assets (
                     rb,
                     asset_uid, toc_number, serial_number, {NOMENCLATURE_COL}, name, category, status, location,
-                    current_holder, sector, is_metrology, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    current_holder, {ASSET_HOLDER_USER_ID_COL}, {ASSET_HOLDER_KEY_COL},
+                    sector, is_metrology, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     int(rb),
@@ -896,6 +1136,8 @@ def create_asset_db(
                     category.strip(),
                     st,
                     (location or "").strip() or None,
+                    None,
+                    None,
                     None,
                     (sector or "").strip() or None,
                     1 if int(is_metrology or 0) == 1 else 0,
@@ -959,6 +1201,10 @@ def update_asset_db(
     category: Optional[str] = None,
     sector: Optional[str] = None,
     is_metrology: Optional[int] = None,
+    # optional user-id updates (used when assignment updates asset holder)
+    current_holder: Optional[str] = None,
+    current_holder_user_id: Optional[int] = None,
+    current_holder_key: Optional[str] = None,
     source: str = "update_asset",
 ) -> None:
     uid = (asset_uid or "").strip()
@@ -968,6 +1214,7 @@ def update_asset_db(
     allowed_status = {"active", "on_loan", "service", "scrapped"}
 
     fields: Dict[str, Any] = {}
+
     if status is not None:
         st = (status or "").strip().lower()
         if st not in allowed_status:
@@ -1004,16 +1251,25 @@ def update_asset_db(
     if is_metrology is not None:
         fields["is_metrology"] = 1 if int(is_metrology or 0) == 1 else 0
 
+    # Optional holder updates (used by assignment path)
+    if current_holder is not None:
+        fields["current_holder"] = ((current_holder or "").strip() or None)
+    if current_holder_user_id is not None:
+        try:
+            fields[ASSET_HOLDER_USER_ID_COL] = int(current_holder_user_id) if int(current_holder_user_id) > 0 else None
+        except Exception:
+            fields[ASSET_HOLDER_USER_ID_COL] = None
+    if current_holder_key is not None:
+        fields[ASSET_HOLDER_KEY_COL] = ((current_holder_key or "").strip() or None)
+
     if not fields:
         return
 
     now = _now_iso()
 
     with db_conn() as conn:
-        # fail-safe schema pre lock-a
-        _ensure_schema_for_assets(conn, with_events=True, with_rb=True)
+        _ensure_schema_for_assets(conn, with_events=True, with_rb=True, with_disposal=True, with_user_ids=True)
         _commit_quiet(conn)
-
         _begin_immediate(conn)
 
         try:
@@ -1021,9 +1277,11 @@ def update_asset_db(
             if before is None:
                 raise ValueError("asset not found")
 
-            # Legacy: ako status nije on_loan -> očisti holder
+            # Legacy: ako status nije on_loan -> očisti holder + holder ids
             if "status" in fields and fields["status"] != "on_loan":
                 fields["current_holder"] = None
+                fields[ASSET_HOLDER_USER_ID_COL] = None
+                fields[ASSET_HOLDER_KEY_COL] = None
 
             fields["updated_at"] = now
 
@@ -1051,7 +1309,10 @@ def update_asset_db(
                         keys=[
                             "status", "location", "toc_number", "serial_number",
                             NOMENCLATURE_COL,
-                            "name", "category", "sector", "is_metrology", "current_holder",
+                            "name", "category", "sector", "is_metrology",
+                            "current_holder",
+                            ASSET_HOLDER_USER_ID_COL,
+                            ASSET_HOLDER_KEY_COL,
                         ],
                     )
 
@@ -1067,10 +1328,8 @@ def update_asset_db(
                             source=source,
                             event_time=now,
                         )
-
                         t = str(to or "").strip().lower()
                         f = str(frm or "").strip().lower()
-
                         if t == "scrapped":
                             write_asset_event(
                                 conn, actor=actor, asset_uid=uid, event_type="SCRAPPED",
@@ -1081,16 +1340,6 @@ def update_asset_db(
                                 conn, actor=actor, asset_uid=uid, event_type="RESTORED",
                                 data_obj={"from": frm, "to": to}, source=source, event_time=now
                             )
-                        if t == "service" and f != "service":
-                            write_asset_event(
-                                conn, actor=actor, asset_uid=uid, event_type="SERVICE_ENTER",
-                                data_obj={"from": frm, "to": to}, source=source, event_time=now
-                            )
-                        if f == "service" and t != "service":
-                            write_asset_event(
-                                conn, actor=actor, asset_uid=uid, event_type="SERVICE_EXIT",
-                                data_obj={"from": frm, "to": to}, source=source, event_time=now
-                            )
 
                     if "location" in diffs:
                         write_asset_event(
@@ -1098,10 +1347,15 @@ def update_asset_db(
                             data_obj=diffs["location"], source=source, event_time=now
                         )
 
-                    if "current_holder" in diffs:
+                    if "current_holder" in diffs or ASSET_HOLDER_USER_ID_COL in diffs or ASSET_HOLDER_KEY_COL in diffs:
                         write_asset_event(
                             conn, actor=actor, asset_uid=uid, event_type="HOLDER_CHANGED",
-                            data_obj=diffs["current_holder"], source=source, event_time=now
+                            data_obj={
+                                "holder": diffs.get("current_holder"),
+                                "holder_user_id": diffs.get(ASSET_HOLDER_USER_ID_COL),
+                                "holder_key": diffs.get(ASSET_HOLDER_KEY_COL),
+                            },
+                            source=source, event_time=now
                         )
 
                     for k, etype in (
@@ -1135,19 +1389,19 @@ def list_assets_db(
     sector: str = "SVE",
     metrology_only: bool = False,
     limit: int = 5000,
+    # NEW: MY scope without string match
+    holder_user_id: Optional[int] = None,
+    holder_key: str = "",
 ) -> List[Dict[str, Any]]:
     lim = _clamp_int(limit, 5000, min_v=1, max_v=100000)
 
     with db_conn() as conn:
-        # fail-safe schema (rb bitan za pretragu)
-        _ensure_schema_for_assets(conn, with_events=False, with_rb=True)
+        _ensure_schema_for_assets(conn, with_events=False, with_rb=True, with_disposal=False, with_user_ids=True)
         _commit_quiet(conn)
 
-        has_nom = False
-        try:
-            has_nom = _column_exists(conn, "assets", NOMENCLATURE_COL)
-        except Exception:
-            has_nom = False
+        has_nom = _column_exists(conn, "assets", NOMENCLATURE_COL)
+        has_huid = _column_exists(conn, "assets", ASSET_HOLDER_USER_ID_COL)
+        has_hkey = _column_exists(conn, "assets", ASSET_HOLDER_KEY_COL)
 
         where: List[str] = []
         params: List[Any] = []
@@ -1189,13 +1443,34 @@ def list_assets_db(
         if bool(metrology_only):
             where.append("COALESCE(is_metrology,0) = 1")
 
-        select_cols = ["rb", "asset_uid", "toc_number", "serial_number"]
-        if has_nom:
-            select_cols.append(NOMENCLATURE_COL)
-        select_cols += [
+        # MY-scope filters (optional)
+        try:
+            huid = int(holder_user_id) if holder_user_id is not None else 0
+        except Exception:
+            huid = 0
+        hk = (holder_key or "").strip()
+
+        if huid > 0 and has_huid:
+            where.append(f"COALESCE({ASSET_HOLDER_USER_ID_COL},0) = ?")
+            params.append(huid)
+        elif hk and has_hkey:
+            where.append(f"LOWER(TRIM(COALESCE({ASSET_HOLDER_KEY_COL},''))) = LOWER(TRIM(?))")
+            params.append(hk)
+
+        select_cols = [
+            "rb", "asset_uid", "toc_number", "serial_number",
             "name", "category", "status", "location",
-            "current_holder", "sector", "is_metrology", "created_at", "updated_at",
+            "current_holder", "sector", "is_metrology",
+            "created_at", "updated_at",
         ]
+        if has_nom:
+            select_cols.insert(4, NOMENCLATURE_COL)
+
+        # include holder id/key when available
+        if has_huid:
+            select_cols.append(ASSET_HOLDER_USER_ID_COL)
+        if has_hkey:
+            select_cols.append(ASSET_HOLDER_KEY_COL)
 
         sql = f"SELECT {', '.join(select_cols)} FROM assets"
         if where:
@@ -1212,7 +1487,7 @@ def get_asset_db(asset_uid: str) -> Optional[Dict[str, Any]]:
     if not uid:
         return None
     with db_conn() as conn:
-        _ensure_schema_for_assets(conn, with_events=False, with_rb=True)
+        _ensure_schema_for_assets(conn, with_events=False, with_rb=True, with_disposal=False, with_user_ids=True)
         _commit_quiet(conn)
         row = conn.execute("SELECT * FROM assets WHERE asset_uid=?;", (uid,)).fetchone()
         return row_to_dict(row)
@@ -1272,11 +1547,312 @@ def get_asset(*, asset_uid: str) -> Optional[Dict[str, Any]]:
     return get_asset_db(asset_uid)
 
 
-# (FILENAME: core/db.py - END PART 3/4)
+# =========================
+# DISPOSAL (DB) — Priprema za rashod
+# =========================
+
+def prepare_disposal_db(
+    *,
+    actor: str,
+    asset_uid: str,
+    reason: str = "",
+    notes: str = "",
+    data_obj: Optional[Dict[str, Any]] = None,
+    source: str = "disposal_prepare",
+) -> int:
+    uid = (asset_uid or "").strip()
+    if not uid:
+        raise ValueError("asset_uid cannot be empty")
+
+    with db_conn() as conn:
+        _ensure_schema_for_disposal(conn)
+        _commit_quiet(conn)
+
+        _begin_immediate(conn)
+        try:
+            a = row_to_dict(conn.execute("SELECT * FROM assets WHERE asset_uid=?;", (uid,)).fetchone())
+            if a is None:
+                raise ValueError("asset not found")
+
+            st = str(a.get("status") or "").strip().lower()
+            if st == "scrapped":
+                raise ValueError("Sredstvo je već rashodovano.")
+
+            row = conn.execute(
+                """
+                SELECT disposal_id FROM disposal_cases
+                WHERE asset_uid=? AND status IN ('PREPARED','APPROVED')
+                LIMIT 1;
+                """,
+                (uid,),
+            ).fetchone()
+            if row is not None:
+                raise ValueError("Već postoji otvorena priprema za rashod za ovo sredstvo.")
+
+            now = _now_iso()
+            cur = conn.execute(
+                """
+                INSERT INTO disposal_cases (created_at, asset_uid, status, prepared_by, reason, notes, data_json, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    now,
+                    uid,
+                    DISPOSAL_STATUS_PREPARED,
+                    (actor or "").strip() or "user",
+                    (reason or "").strip() or None,
+                    (notes or "").strip() or None,
+                    _safe_json(data_obj),
+                    (source or "").strip() or None,
+                ),
+            )
+            disposal_id = int(cur.lastrowid)
+
+            after = row_to_dict(conn.execute("SELECT * FROM disposal_cases WHERE disposal_id=?;", (disposal_id,)).fetchone())
+            write_audit(conn, actor, "disposal_cases", str(disposal_id), "INSERT", None, after, source)
+
+            try:
+                write_asset_event(
+                    conn,
+                    actor=actor,
+                    asset_uid=uid,
+                    event_type="DISPOSAL_PREPARED",
+                    data_obj={"disposal_id": disposal_id, "reason": (reason or "").strip(), "notes": (notes or "").strip()},
+                    source=source,
+                    event_time=now,
+                )
+            except Exception:
+                pass
+
+            conn.commit()
+            return disposal_id
+        except Exception:
+            _rollback_quiet(conn)
+            raise
 
 
-# FILENAME: core/db.py
-# (FILENAME: core/db.py - START PART 4/4)
+def approve_disposal_db(
+    *,
+    actor: str,
+    disposal_id: int,
+    source: str = "disposal_approve",
+) -> None:
+    did = int(disposal_id)
+    if did <= 0:
+        raise ValueError("disposal_id must be > 0")
+
+    with db_conn() as conn:
+        _ensure_schema_for_disposal(conn)
+        _commit_quiet(conn)
+
+        _begin_immediate(conn)
+        try:
+            before = row_to_dict(conn.execute("SELECT * FROM disposal_cases WHERE disposal_id=?;", (did,)).fetchone())
+            if before is None:
+                raise ValueError("disposal case not found")
+
+            st = str(before.get("status") or "").strip().upper()
+            if st != DISPOSAL_STATUS_PREPARED:
+                raise ValueError("Odobravanje je moguće samo iz statusa PREPARED.")
+
+            now = _now_iso()
+            conn.execute(
+                """
+                UPDATE disposal_cases
+                SET status=?, approved_by=?, approved_at=?
+                WHERE disposal_id=?;
+                """,
+                (DISPOSAL_STATUS_APPROVED, (actor or "").strip() or "user", now, did),
+            )
+
+            after = row_to_dict(conn.execute("SELECT * FROM disposal_cases WHERE disposal_id=?;", (did,)).fetchone())
+            write_audit(conn, actor, "disposal_cases", str(did), "UPDATE", before, after, source)
+
+            try:
+                uid = str(before.get("asset_uid") or "").strip()
+                if uid:
+                    write_asset_event(
+                        conn,
+                        actor=actor,
+                        asset_uid=uid,
+                        event_type="DISPOSAL_APPROVED",
+                        data_obj={"disposal_id": did},
+                        source=source,
+                        event_time=now,
+                    )
+            except Exception:
+                pass
+
+            conn.commit()
+        except Exception:
+            _rollback_quiet(conn)
+            raise
+
+
+def cancel_disposal_db(
+    *,
+    actor: str,
+    disposal_id: int,
+    reason: str = "",
+    source: str = "disposal_cancel",
+) -> None:
+    did = int(disposal_id)
+    if did <= 0:
+        raise ValueError("disposal_id must be > 0")
+
+    with db_conn() as conn:
+        _ensure_schema_for_disposal(conn)
+        _commit_quiet(conn)
+
+        _begin_immediate(conn)
+        try:
+            before = row_to_dict(conn.execute("SELECT * FROM disposal_cases WHERE disposal_id=?;", (did,)).fetchone())
+            if before is None:
+                raise ValueError("disposal case not found")
+
+            st = str(before.get("status") or "").strip().upper()
+            if st == DISPOSAL_STATUS_DISPOSED:
+                raise ValueError("Ne možeš poništiti već rashodovano.")
+
+            now = _now_iso()
+            conn.execute(
+                """
+                UPDATE disposal_cases
+                SET status=?, notes=COALESCE(notes,'') || ?
+                WHERE disposal_id=?;
+                """,
+                (
+                    DISPOSAL_STATUS_CANCELLED,
+                    (("\nCANCEL: " + (reason or "").strip()) if (reason or "").strip() else "\nCANCEL"),
+                    did,
+                ),
+            )
+
+            after = row_to_dict(conn.execute("SELECT * FROM disposal_cases WHERE disposal_id=?;", (did,)).fetchone())
+            write_audit(conn, actor, "disposal_cases", str(did), "UPDATE", before, after, source)
+
+            try:
+                uid = str(before.get("asset_uid") or "").strip()
+                if uid:
+                    write_asset_event(
+                        conn,
+                        actor=actor,
+                        asset_uid=uid,
+                        event_type="DISPOSAL_CANCELLED",
+                        data_obj={"disposal_id": did, "reason": (reason or "").strip()},
+                        source=source,
+                        event_time=now,
+                    )
+            except Exception:
+                pass
+
+            conn.commit()
+        except Exception:
+            _rollback_quiet(conn)
+            raise
+
+
+def dispose_from_case_db(
+    *,
+    actor: str,
+    disposal_id: int,
+    disposed_doc_no: str = "",
+    source: str = "disposal_dispose",
+) -> None:
+    did = int(disposal_id)
+    if did <= 0:
+        raise ValueError("disposal_id must be > 0")
+
+    with db_conn() as conn:
+        _ensure_schema_for_disposal(conn)
+        _commit_quiet(conn)
+
+        _begin_immediate(conn)
+        try:
+            case_before = row_to_dict(conn.execute("SELECT * FROM disposal_cases WHERE disposal_id=?;", (did,)).fetchone())
+            if case_before is None:
+                raise ValueError("disposal case not found")
+
+            st = str(case_before.get("status") or "").strip().upper()
+            if st not in (DISPOSAL_STATUS_PREPARED, DISPOSAL_STATUS_APPROVED):
+                raise ValueError("Rashod je dozvoljen samo iz PREPARED ili APPROVED.")
+
+            uid = str(case_before.get("asset_uid") or "").strip()
+            if not uid:
+                raise ValueError("invalid asset_uid in disposal case")
+
+            asset_before = row_to_dict(conn.execute("SELECT * FROM assets WHERE asset_uid=?;", (uid,)).fetchone())
+            if asset_before is None:
+                raise ValueError("asset not found")
+
+            now = _now_iso()
+
+            # 1) zatvori disposal case
+            conn.execute(
+                """
+                UPDATE disposal_cases
+                SET status=?, disposed_by=?, disposed_at=?, disposed_doc_no=?
+                WHERE disposal_id=?;
+                """,
+                (
+                    DISPOSAL_STATUS_DISPOSED,
+                    (actor or "").strip() or "user",
+                    now,
+                    (disposed_doc_no or "").strip() or None,
+                    did,
+                ),
+            )
+            case_after = row_to_dict(conn.execute("SELECT * FROM disposal_cases WHERE disposal_id=?;", (did,)).fetchone())
+            write_audit(conn, actor, "disposal_cases", str(did), "UPDATE", case_before, case_after, source)
+
+            # 2) ažuriraj asset status + očisti holder i user id fields
+            conn.execute(
+                f"""
+                UPDATE assets
+                SET status=?, current_holder=NULL,
+                    {ASSET_HOLDER_USER_ID_COL}=NULL,
+                    {ASSET_HOLDER_KEY_COL}=NULL,
+                    updated_at=?
+                WHERE asset_uid=?;
+                """,
+                ("scrapped", now, uid),
+            )
+            asset_after = row_to_dict(conn.execute("SELECT * FROM assets WHERE asset_uid=?;", (uid,)).fetchone())
+            write_audit(conn, actor, "assets", uid, "UPDATE", asset_before, asset_after, source)
+
+            # 3) timeline events
+            try:
+                write_asset_event(
+                    conn,
+                    actor=actor,
+                    asset_uid=uid,
+                    event_type="DISPOSED",
+                    data_obj={"disposal_id": did, "disposed_doc_no": (disposed_doc_no or "").strip()},
+                    source=source,
+                    event_time=now,
+                )
+                write_asset_event(
+                    conn,
+                    actor=actor,
+                    asset_uid=uid,
+                    event_type="STATUS_CHANGED",
+                    data_obj={"from": asset_before.get("status"), "to": "scrapped"},
+                    source=source,
+                    event_time=now,
+                )
+            except Exception:
+                pass
+
+            conn.commit()
+        except Exception:
+            _rollback_quiet(conn)
+            raise
+
+
+# =========================
+# ASSETS API (compat wrappers)
+# =========================
+
 def list_assets(
     *,
     q: str = "",
@@ -1286,7 +1862,17 @@ def list_assets(
     sector: str = "SVE",
     metrology_only: bool = False,
     limit: int = 5000,
+    # MY scope support:
+    holder_user_id: Optional[int] = None,
+    holder_key: str = "",
+    # compat / ignored here:
+    scope: str = "",
+    actor: str = "",
+    actor_key: str = "",
+    sector_id: Optional[int] = None,
+    **_extra: Any,
 ) -> List[Dict[str, Any]]:
+    _ = (scope, actor, actor_key, sector_id, _extra)
     s = (q or "").strip() or (search or "").strip()
     return list_assets_db(
         search=s,
@@ -1295,6 +1881,8 @@ def list_assets(
         sector=sector,
         metrology_only=metrology_only,
         limit=limit,
+        holder_user_id=holder_user_id,
+        holder_key=holder_key,
     )
 
 
@@ -1302,14 +1890,12 @@ def list_assets_brief_db(limit: int = 1000, sector: str = "SVE", metrology_only:
     lim = _clamp_int(limit, 1000, min_v=1, max_v=100000)
 
     with db_conn() as conn:
-        _ensure_schema_for_assets(conn, with_events=False, with_rb=True)
+        _ensure_schema_for_assets(conn, with_events=False, with_rb=True, with_disposal=False, with_user_ids=True)
         _commit_quiet(conn)
 
-        has_nom = False
-        try:
-            has_nom = _column_exists(conn, "assets", NOMENCLATURE_COL)
-        except Exception:
-            has_nom = False
+        has_nom = _column_exists(conn, "assets", NOMENCLATURE_COL)
+        has_huid = _column_exists(conn, "assets", ASSET_HOLDER_USER_ID_COL)
+        has_hkey = _column_exists(conn, "assets", ASSET_HOLDER_KEY_COL)
 
         where: List[str] = []
         params: List[Any] = []
@@ -1325,6 +1911,10 @@ def list_assets_brief_db(limit: int = 1000, sector: str = "SVE", metrology_only:
         select_cols = ["rb", "asset_uid", "name", "category", "status", "current_holder", "sector", "is_metrology"]
         if has_nom:
             select_cols.append(NOMENCLATURE_COL)
+        if has_huid:
+            select_cols.append(ASSET_HOLDER_USER_ID_COL)
+        if has_hkey:
+            select_cols.append(ASSET_HOLDER_KEY_COL)
 
         sql = f"SELECT {', '.join(select_cols)} FROM assets"
         if where:
@@ -1336,7 +1926,18 @@ def list_assets_brief_db(limit: int = 1000, sector: str = "SVE", metrology_only:
         return [{k: r[k] for k in r.keys()} for r in rows]
 
 
-def list_assets_brief(*, limit: int = 1000, sector: str = "SVE", metrology_only: bool = False) -> List[Dict[str, Any]]:
+def list_assets_brief(
+    *,
+    limit: int = 1000,
+    sector: str = "SVE",
+    metrology_only: bool = False,
+    scope: str = "",
+    actor: str = "",
+    actor_key: str = "",
+    sector_id: Optional[int] = None,
+    **_extra: Any,
+) -> List[Dict[str, Any]]:
+    _ = (scope, actor, actor_key, sector_id, _extra)
     return list_assets_brief_db(limit=limit, sector=sector, metrology_only=metrology_only)
 
 
@@ -1357,6 +1958,7 @@ def create_asset(
     source: str = "create_asset",
     **_extra: Any,
 ) -> str:
+    _ = _extra
     t = (toc_number or toc or "").strip()
     sn = (serial_number or serial or "").strip()
     nom = (nomenclature_number or "").strip()
@@ -1387,9 +1989,15 @@ def create_assignment_db(
     to_location: str = "",
     note: str = "",
     source: str = "ui_new_assignment",
+    # NEW: optional ids/keys (service may pass)
+    actor_user_id: Optional[int] = None,
+    to_user_id: Optional[int] = None,
+    from_user_id: Optional[int] = None,
+    to_holder_key: str = "",
+    from_holder_key: str = "",
 ) -> int:
-    action = (action or "").strip().lower()
-    if action not in ("assign", "transfer", "return"):
+    action_n = (action or "").strip().lower()
+    if action_n not in ("assign", "transfer", "return"):
         raise ValueError("action must be assign/transfer/return")
 
     uid = (asset_uid or "").strip()
@@ -1397,10 +2005,8 @@ def create_assignment_db(
         raise ValueError("asset_uid cannot be empty")
 
     with db_conn() as conn:
-        # fail-safe schema pre lock-a
-        _ensure_schema_for_assignments(conn)
+        _ensure_schema_for_assignments(conn, with_user_ids=True)
         _commit_quiet(conn)
-
         _begin_immediate(conn)
 
         try:
@@ -1411,31 +2017,57 @@ def create_assignment_db(
             from_holder = asset_before.get("current_holder") or ""
             from_location = asset_before.get("location") or ""
 
-            if action in ("assign", "transfer"):
+            # If caller didn't pass from_user_id/key, try to pick from asset row
+            if from_user_id is None:
+                try:
+                    from_user_id = int(asset_before.get(ASSET_HOLDER_USER_ID_COL) or 0) or None
+                except Exception:
+                    from_user_id = None
+            if not from_holder_key:
+                try:
+                    from_holder_key = str(asset_before.get(ASSET_HOLDER_KEY_COL) or "").strip()
+                except Exception:
+                    from_holder_key = ""
+
+            if action_n in ("assign", "transfer"):
                 new_holder = (to_holder or "").strip()
                 new_location = (to_location or "").strip() or from_location
                 new_status = "on_loan"
+                new_holder_user_id = int(to_user_id) if (to_user_id is not None and int(to_user_id) > 0) else None
+                new_holder_key = (to_holder_key or "").strip() or None
             else:
                 new_holder = ""
                 new_location = (to_location or "").strip() or from_location
                 new_status = "active"
+                new_holder_user_id = None
+                new_holder_key = None
 
             now = _now_iso()
 
             cur = conn.execute(
-                """
-                INSERT INTO assignments (created_at, asset_uid, action, from_holder, to_holder, from_location, to_location, note)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                f"""
+                INSERT INTO assignments (
+                    created_at, asset_uid, action,
+                    from_holder, to_holder, from_location, to_location, note,
+                    {ASSIGN_ACTOR_USER_ID_COL}, {ASSIGN_FROM_USER_ID_COL}, {ASSIGN_TO_USER_ID_COL},
+                    {ASSIGN_FROM_HOLDER_KEY_COL}, {ASSIGN_TO_HOLDER_KEY_COL}
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     now,
                     uid,
-                    action,
+                    action_n,
                     from_holder or None,
-                    (new_holder if action != "return" else None),
+                    (new_holder if action_n != "return" else None),
                     from_location or None,
                     new_location or None,
                     (note or "").strip() or None,
+                    int(actor_user_id) if (actor_user_id is not None and int(actor_user_id) > 0) else None,
+                    int(from_user_id) if (from_user_id is not None and int(from_user_id) > 0) else None,
+                    int(to_user_id) if (to_user_id is not None and int(to_user_id) > 0) else None,
+                    (from_holder_key or "").strip() or None,
+                    (to_holder_key or "").strip() or None,
                 ),
             )
             assignment_id = int(cur.lastrowid)
@@ -1445,13 +2077,27 @@ def create_assignment_db(
             )
             write_audit(conn, actor, "assignments", str(assignment_id), "INSERT", None, assignment_after, source)
 
+            # Update asset holder + ids/keys
             conn.execute(
-                """
+                f"""
                 UPDATE assets
-                SET current_holder=?, location=?, status=?, updated_at=?
+                SET current_holder=?,
+                    {ASSET_HOLDER_USER_ID_COL}=?,
+                    {ASSET_HOLDER_KEY_COL}=?,
+                    location=?,
+                    status=?,
+                    updated_at=?
                 WHERE asset_uid=?;
                 """,
-                (new_holder or None, new_location or None, new_status, now, uid),
+                (
+                    new_holder or None,
+                    new_holder_user_id,
+                    new_holder_key,
+                    new_location or None,
+                    new_status,
+                    now,
+                    uid,
+                ),
             )
 
             asset_after = row_to_dict(conn.execute("SELECT * FROM assets WHERE asset_uid=?;", (uid,)).fetchone())
@@ -1464,7 +2110,7 @@ def create_assignment_db(
                     asset_uid=uid,
                     event_type="ASSIGNMENT",
                     data_obj={
-                        "action": action,
+                        "action": action_n,
                         "assignment_id": assignment_id,
                         "from_holder": from_holder,
                         "to_holder": new_holder,
@@ -1472,6 +2118,11 @@ def create_assignment_db(
                         "to_location": new_location,
                         "note": (note or "").strip(),
                         "status_to": new_status,
+                        "from_user_id": from_user_id,
+                        "to_user_id": to_user_id,
+                        "actor_user_id": actor_user_id,
+                        "from_holder_key": from_holder_key,
+                        "to_holder_key": to_holder_key,
                     },
                     source=source,
                     event_time=now,
@@ -1480,17 +2131,6 @@ def create_assignment_db(
                     write_asset_event(
                         conn, actor=actor, asset_uid=uid, event_type="LOCATION_CHANGED",
                         data_obj={"from": from_location, "to": new_location}, source=source, event_time=now
-                    )
-                if str(from_holder or "") != str(new_holder or ""):
-                    write_asset_event(
-                        conn, actor=actor, asset_uid=uid, event_type="HOLDER_CHANGED",
-                        data_obj={"from": from_holder, "to": new_holder}, source=source, event_time=now
-                    )
-                b_st = (asset_before.get("status") or "")
-                if str(b_st) != str(new_status):
-                    write_asset_event(
-                        conn, actor=actor, asset_uid=uid, event_type="STATUS_CHANGED",
-                        data_obj={"from": b_st, "to": new_status}, source=source, event_time=now
                     )
             except Exception:
                 pass
@@ -1534,13 +2174,8 @@ def list_assignments_db(search: str = "", action: str = "SVE", limit: int = 1000
     params.append(int(lim))
 
     with db_conn() as conn:
-        try:
-            _migration_v1(conn)
-            _migration_v2(conn)
-        except Exception:
-            pass
+        _ensure_schema_for_assignments(conn, with_user_ids=True)
         _commit_quiet(conn)
-
         rows = conn.execute(sql, tuple(params)).fetchall()
         return [{k: r[k] for k in r.keys()} for r in rows]
 
@@ -1560,12 +2195,8 @@ def list_assignments_for_asset_db(asset_uid: str, limit: int = 500) -> List[Dict
         LIMIT ?;
     """
     with db_conn() as conn:
-        try:
-            _migration_v2(conn)
-        except Exception:
-            pass
+        _ensure_schema_for_assignments(conn, with_user_ids=True)
         _commit_quiet(conn)
-
         rows = conn.execute(sql, (uid, int(lim))).fetchall()
         return [{k: r[k] for k in r.keys()} for r in rows]
 
@@ -1584,12 +2215,8 @@ def list_audit_db(entity: str, entity_id: str, limit: int = 500) -> List[Dict[st
         LIMIT ?;
     """
     with db_conn() as conn:
-        try:
-            _migration_v1(conn)
-        except Exception:
-            pass
+        _ensure_audit_schema(conn)
         _commit_quiet(conn)
-
         rows = conn.execute(sql, (entity, entity_id, int(lim))).fetchall()
         return [{k: r[k] for k in r.keys()} for r in rows]
 
@@ -1648,12 +2275,10 @@ def list_audit_global_db(
     params.append(int(lim))
 
     with db_conn() as conn:
-        try:
-            _migration_v1(conn)
-        except Exception:
-            pass
+        _ensure_audit_schema(conn)
         _commit_quiet(conn)
-
         rows = conn.execute(sql, tuple(params)).fetchall()
         return [{k: r[k] for k in r.keys()} for r in rows]
-# (FILENAME: core/db.py - END PART 4/4)
+
+# (FILENAME: core/db.py - END PART 3/3)
+# FILENAME: core/db.py

@@ -10697,3 +10697,133 @@ KeyboardInterrupt
 2026-02-25 21:38:14 | INFO | BazaS2 | run=7f63281703 | user=Bojkovski Jelena | role=SECTOR_ADMIN | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
 2026-02-25 21:38:14 | ERROR | BazaS2 | run=7f63281703 | user=Bojkovski Jelena | role=SECTOR_ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
 2026-02-25 21:39:10 | WARNING | BazaS2 | run=7f63281703 | user=Bojkovski Jelena | role=SECTOR_ADMIN | QT_WARN: QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+2026-02-25 22:20:55 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | === BazaS2 start | version=0.2-v1 ===
+2026-02-25 22:20:55 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | RUN_ID=6982537d90
+2026-02-25 22:20:55 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-25 22:20:55 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-25 22:20:55 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-25 22:20:55 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | LOG_ROTATE maxMB=10 backups=10
+2026-02-25 22:20:55 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-25 22:20:55 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-25 22:20:55 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | Pokrećem self-check...
+2026-02-25 22:20:56 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | Deps OK: 4, missing: 0
+2026-02-25 22:20:56 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | Self-check report snimljen: selfcheck_report.json
+2026-02-25 22:20:56 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | Self-check: sve biblioteke prisutne.
+2026-02-25 22:20:56 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | DB init OK. schema_version: 7 -> 8
+2026-02-25 22:20:57 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | Theme applied (saved theme).
+2026-02-25 22:20:57 | INFO | BazaS2 | run=6982537d90 | user=user | role=READONLY | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-25 22:21:09 | INFO | BazaS2 | run=6982537d90 | user=Kresojević Marko | role=ADMIN | AssignmentsPage: učitano 11 zapisa.
+2026-02-25 22:21:09 | INFO | BazaS2 | run=6982537d90 | user=Kresojević Marko | role=ADMIN | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-25 22:21:09 | ERROR | BazaS2 | run=6982537d90 | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | === BazaS2 start | version=0.2-v1 ===
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | RUN_ID=93340c9c8c
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | LOG_ROTATE maxMB=10 backups=10
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | Pokrećem self-check...
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | Deps OK: 4, missing: 0
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | Self-check report snimljen: selfcheck_report.json
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | Self-check: sve biblioteke prisutne.
+2026-02-25 22:30:16 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | DB init OK. schema_version: 8 -> 8
+2026-02-25 22:30:17 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | Theme applied (saved theme).
+2026-02-25 22:30:17 | INFO | BazaS2 | run=93340c9c8c | user=user | role=READONLY | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-25 22:30:24 | INFO | BazaS2 | run=93340c9c8c | user=Kresojević Marko | role=ADMIN | AssignmentsPage: učitano 11 zapisa.
+2026-02-25 22:30:24 | INFO | BazaS2 | run=93340c9c8c | user=Kresojević Marko | role=ADMIN | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-25 22:30:24 | ERROR | BazaS2 | run=93340c9c8c | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-25 23:14:38 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | === BazaS2 start | version=0.2-v1 ===
+2026-02-25 23:14:38 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | RUN_ID=cc6ae16972
+2026-02-25 23:14:38 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-25 23:14:38 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-25 23:14:38 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-25 23:14:38 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | LOG_ROTATE maxMB=10 backups=10
+2026-02-25 23:14:38 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-25 23:14:38 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-25 23:14:38 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | Pokrećem self-check...
+2026-02-25 23:14:39 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | Deps OK: 4, missing: 0
+2026-02-25 23:14:39 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | Self-check report snimljen: selfcheck_report.json
+2026-02-25 23:14:39 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | Self-check: sve biblioteke prisutne.
+2026-02-25 23:14:39 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | DB init OK. schema_version: 8 -> 9
+2026-02-25 23:14:39 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | Theme applied (saved theme).
+2026-02-25 23:14:39 | INFO | BazaS2 | run=cc6ae16972 | user=user | role=READONLY | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-25 23:14:48 | INFO | BazaS2 | run=cc6ae16972 | user=Kresojević Marko | role=ADMIN | AssignmentsPage: učitano 11 zapisa.
+2026-02-25 23:14:48 | INFO | BazaS2 | run=cc6ae16972 | user=Kresojević Marko | role=ADMIN | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-25 23:14:48 | ERROR | BazaS2 | run=cc6ae16972 | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-25 23:45:35 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | === BazaS2 start | version=0.2-v1 ===
+2026-02-25 23:45:35 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | RUN_ID=a5f1104ad5
+2026-02-25 23:45:35 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-25 23:45:35 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-25 23:45:35 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-25 23:45:35 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | LOG_ROTATE maxMB=10 backups=10
+2026-02-25 23:45:35 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-25 23:45:35 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-25 23:45:35 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | Pokrećem self-check...
+2026-02-25 23:45:39 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | Deps OK: 4, missing: 0
+2026-02-25 23:45:39 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | Self-check report snimljen: selfcheck_report.json
+2026-02-25 23:45:39 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | Self-check: sve biblioteke prisutne.
+2026-02-25 23:45:39 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | DB init OK. schema_version: 9 -> 9
+2026-02-25 23:45:39 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | Theme applied (saved theme).
+2026-02-25 23:45:39 | INFO | BazaS2 | run=a5f1104ad5 | user=user | role=READONLY | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-25 23:45:53 | INFO | BazaS2 | run=a5f1104ad5 | user=Kresojević Marko | role=ADMIN | AssignmentsPage: učitano 11 zapisa.
+2026-02-25 23:45:54 | INFO | BazaS2 | run=a5f1104ad5 | user=Kresojević Marko | role=ADMIN | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-25 23:45:54 | ERROR | BazaS2 | run=a5f1104ad5 | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-25 23:45:57 | WARNING | BazaS2 | run=a5f1104ad5 | user=Kresojević Marko | role=ADMIN | QT_WARN: QWindowsWindow::setGeometry: Unable to set geometry 1333x938+346+81 (frame: 1351x985+337+43) on QWidgetWindow/"AssetDetailDialogWindow" on "\\.\DISPLAY1". Resulting geometry: 1333x966+346+81 (frame: 1351x1013+337+43) margins: 9, 38, 9, 9 minimum size: 240x160 MINMAXINFO(maxSize=POINT(x=0, y=0), maxpos=POINT(x=0, y=0), maxtrack=POINT(x=0, y=0), mintrack=POINT(x=318, y=247)))
+2026-02-25 23:56:46 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | === BazaS2 start | version=0.2-v1 ===
+2026-02-25 23:56:46 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | RUN_ID=f6e781aa36
+2026-02-25 23:56:46 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-25 23:56:46 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-25 23:56:46 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-25 23:56:46 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | LOG_ROTATE maxMB=10 backups=10
+2026-02-25 23:56:46 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-25 23:56:46 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-25 23:56:46 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | Pokrećem self-check...
+2026-02-25 23:56:49 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | Deps OK: 4, missing: 0
+2026-02-25 23:56:49 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | Self-check report snimljen: selfcheck_report.json
+2026-02-25 23:56:49 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | Self-check: sve biblioteke prisutne.
+2026-02-25 23:56:49 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | DB init OK. schema_version: 9 -> 9
+2026-02-25 23:56:49 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | Theme applied (saved theme).
+2026-02-25 23:56:49 | INFO | BazaS2 | run=f6e781aa36 | user=user | role=READONLY | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-25 23:56:57 | ERROR | BazaS2 | run=f6e781aa36 | user=Kresojević Marko | role=ADMIN | FATAL ERROR: 'AssetsPage' object has no attribute '_on_reload_timeout'
+2026-02-25 23:56:57 | ERROR | BazaS2 | run=f6e781aa36 | user=Kresojević Marko | role=ADMIN | Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1457, in main
+    start_ui(logger)
+    ~~~~~~~~^^^^^^^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1368, in start_ui
+    win = MainWindow(logger)
+  File "D:\DEV\AppToc\V1Baza\app.py", line 965, in __init__
+    self._rebuild_ui_by_profile()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\DEV\AppToc\V1Baza\app.py", line 1190, in _rebuild_ui_by_profile
+    page_assets = AssetsPage(self.logger)
+  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 855, in __init__
+    self._reload_timer.timeout.connect(self._on_reload_timeout)
+                                       ^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'AssetsPage' object has no attribute '_on_reload_timeout'
+
+2026-02-26 00:19:29 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | === BazaS2 start | version=0.2-v1 ===
+2026-02-26 00:19:29 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | RUN_ID=2a0f69f0dd
+2026-02-26 00:19:29 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | BASE_DIR=D:\DEV\AppToc\V1Baza
+2026-02-26 00:19:29 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | LOG_FILE=D:\DEV\AppToc\V1Baza\data\logs\app.log
+2026-02-26 00:19:29 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | ERR_FILE=D:\DEV\AppToc\V1Baza\data\logs\errors.log
+2026-02-26 00:19:29 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | LOG_ROTATE maxMB=10 backups=10
+2026-02-26 00:19:29 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | Napomena: sistem je projektovan za 100% OFFLINE okruženje (bez interneta).
+2026-02-26 00:19:29 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | Faulthandler enabled: D:\DEV\AppToc\V1Baza\data\logs\faulthandler.log
+2026-02-26 00:19:29 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | Pokrećem self-check...
+2026-02-26 00:19:33 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | Deps OK: 4, missing: 0
+2026-02-26 00:19:33 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | Self-check report snimljen: selfcheck_report.json
+2026-02-26 00:19:33 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | Self-check: sve biblioteke prisutne.
+2026-02-26 00:19:33 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | DB init OK. schema_version: 9 -> 9
+2026-02-26 00:19:34 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | Theme applied (saved theme).
+2026-02-26 00:19:34 | INFO | BazaS2 | run=2a0f69f0dd | user=user | role=READONLY | Dialog policy: ON (Windows-like resize W+H + Min/Max + geometry persist).
+2026-02-26 00:19:42 | INFO | BazaS2 | run=2a0f69f0dd | user=Kresojević Marko | role=ADMIN | AssignmentsPage: učitano 11 zapisa.
+2026-02-26 00:19:42 | INFO | BazaS2 | run=2a0f69f0dd | user=Kresojević Marko | role=ADMIN | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-26 00:19:42 | ERROR | BazaS2 | run=2a0f69f0dd | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-26 00:20:01 | WARNING | BazaS2 | run=2a0f69f0dd | user=Kresojević Marko | role=ADMIN | QT_WARN: QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+2026-02-26 00:20:21 | INFO | BazaS2 | run=2a0f69f0dd | user=Bojkovski Jelena | role=SECTOR_ADMIN | AssignmentsPage: učitano 11 zapisa.
+2026-02-26 00:20:21 | INFO | BazaS2 | run=2a0f69f0dd | user=Bojkovski Jelena | role=SECTOR_ADMIN | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-26 00:20:22 | ERROR | BazaS2 | run=2a0f69f0dd | user=Bojkovski Jelena | role=SECTOR_ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-26 00:20:46 | INFO | BazaS2 | run=2a0f69f0dd | user=Atanacković Aleksandar | role=SECTOR_ADMIN | AssignmentsPage: učitano 11 zapisa.
+2026-02-26 00:20:46 | INFO | BazaS2 | run=2a0f69f0dd | user=Atanacković Aleksandar | role=SECTOR_ADMIN | AUDIT_PAGE_V10b_MARKER_2026_02_03: AuditPage učitan (ui/audit_page.py).
+2026-02-26 00:20:47 | ERROR | BazaS2 | run=2a0f69f0dd | user=Atanacković Aleksandar | role=SECTOR_ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at

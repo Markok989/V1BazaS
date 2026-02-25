@@ -1,4 +1,5 @@
 # FILENAME: ui/asset_detail_dialog.py
+# (FILENAME: ui/asset_detail_dialog.py - START PART 1/4)
 # -*- coding: utf-8 -*-
 """
 BazaS2 (offline) — ui/asset_detail_dialog.py
@@ -9,6 +10,14 @@ Asset Detail Dialog:
 - Fail-safe importi (metrology/calendar/edit)
 - Prilozi: preview (slike + tekstualni best-effort) + pretraga + open/open-folder + copy path
 - Offline-only
+
+Senior rev (fix):
+- FIX: vraćen kompletan attachments blok + context menu slot (_on_tbl_context_menu),
+  da UI ne puca na connect().
+- SECURITY: asset read preferira services.assets_service.get_asset_by_uid (RBAC + scope),
+  a direct DB read je fallback.
+- Timeline: prefer core.db.list_asset_events_db, fallback legacy scan.
+- Disposal: smart meni (best-effort), bez rušenja ako nema disposal tabela/funkcija.
 """
 
 from __future__ import annotations
@@ -74,6 +83,7 @@ except Exception:  # pragma: no cover
     def current_sector() -> str:  # type: ignore
         return ""
 
+
 from ui.utils.datetime_fmt import fmt_date_sr
 
 from services.attachments_service import (
@@ -88,6 +98,24 @@ from services.custom_fields_service import (
     list_values_for_asset,
     bulk_set_values_for_asset,
 )
+
+# ✅ Asset service (RBAC+scope) + disposal workflow (best-effort import)
+_ASSET_SVC_ERR = ""
+try:
+    from services.assets_service import (  # type: ignore
+        get_asset_by_uid as svc_get_asset_by_uid,
+        prepare_disposal as svc_prepare_disposal,
+        approve_disposal as svc_approve_disposal,
+        cancel_disposal as svc_cancel_disposal,
+        dispose_from_case as svc_dispose_from_case,
+    )
+except Exception as e:  # pragma: no cover
+    svc_get_asset_by_uid = None  # type: ignore
+    svc_prepare_disposal = None  # type: ignore
+    svc_approve_disposal = None  # type: ignore
+    svc_cancel_disposal = None  # type: ignore
+    svc_dispose_from_case = None  # type: ignore
+    _ASSET_SVC_ERR = str(e)
 
 # ✅ Metrologija: fail-safe import
 _METRO_IMPORT_ERR = ""
@@ -144,24 +172,23 @@ _HINT_COLOR = "#666"
 
 # ✅ RBAC constants (fail-safe)
 try:
-    from core.rbac import PERM_METRO_MANAGE  # type: ignore
+    from core.rbac import (  # type: ignore
+        PERM_METRO_MANAGE,
+        PERM_METRO_VIEW,
+        PERM_ASSETS_METRO_VIEW,
+        PERM_ASSETS_EDIT,
+        PERM_DISPOSAL_PREPARE,
+        PERM_DISPOSAL_APPROVE,
+        PERM_DISPOSAL_DISPOSE,
+    )
 except Exception:  # pragma: no cover
     PERM_METRO_MANAGE = "metrology.manage"
-
-try:
-    from core.rbac import PERM_METRO_VIEW  # type: ignore
-except Exception:  # pragma: no cover
     PERM_METRO_VIEW = "metrology.view"
-
-try:
-    from core.rbac import PERM_ASSETS_METRO_VIEW  # type: ignore
-except Exception:  # pragma: no cover
     PERM_ASSETS_METRO_VIEW = "assets.metrology.view"
-
-try:
-    from core.rbac import PERM_ASSETS_EDIT  # type: ignore
-except Exception:  # pragma: no cover
     PERM_ASSETS_EDIT = "assets.edit"
+    PERM_DISPOSAL_PREPARE = "disposal.prepare"
+    PERM_DISPOSAL_APPROVE = "disposal.approve"
+    PERM_DISPOSAL_DISPOSE = "disposal.dispose"
 
 # ✅ Edit dialog (fail-safe)
 _EDIT_IMPORT_ERR = ""
@@ -179,10 +206,21 @@ def _app_root() -> Path:
 
 
 def _resolve_db_path() -> Path:
-    p = Path(DB_FILE)
-    if not p.is_absolute():
-        p = (_app_root() / p).resolve()
-    return p
+    """
+    Prefer core.db.get_db_path() (jedna istina), fallback na core.config.DB_FILE.
+    """
+    try:
+        from core.db import get_db_path as _get_db_path  # type: ignore
+        p = Path(str(_get_db_path() or "")).expanduser()
+        if str(p):
+            return p.resolve()
+    except Exception:
+        pass
+
+    p2 = Path(DB_FILE)
+    if not p2.is_absolute():
+        p2 = (_app_root() / p2).resolve()
+    return p2
 
 
 def _norm(s: str) -> str:
@@ -234,6 +272,27 @@ def _can_asset_edit() -> bool:
     return False
 
 
+def _can_disposal_prepare() -> bool:
+    try:
+        return bool(can(PERM_DISPOSAL_PREPARE))
+    except Exception:
+        return False
+
+
+def _can_disposal_approve() -> bool:
+    try:
+        return bool(can(PERM_DISPOSAL_APPROVE))
+    except Exception:
+        return False
+
+
+def _can_disposal_dispose() -> bool:
+    try:
+        return bool(can(PERM_DISPOSAL_DISPOSE))
+    except Exception:
+        return False
+
+
 def _current_row_any(table: QTableWidget) -> int:
     r = table.currentRow()
     if r >= 0:
@@ -275,12 +334,30 @@ def _safe_rel_under_root(rel_path: str) -> Optional[Path]:
 
 def _read_asset_row(asset_uid: str) -> Dict[str, Any]:
     """
-    Fail-safe read assets row.
+    SECURITY FIRST:
+    - Primarno čitanje preko services.assets_service.get_asset_by_uid (RBAC + scope).
+    - Fallback direktan DB read samo ako servis nije dostupan (kompatibilnost).
     """
     au = (asset_uid or "").strip()
     if not au:
         return {}
 
+    # 1) Service path (RBAC + scope)
+    if svc_get_asset_by_uid is not None:
+        try:
+            r = svc_get_asset_by_uid(asset_uid=au)  # type: ignore[misc]
+            if isinstance(r, dict):
+                out = dict(r)
+                if "nomenclature_no" not in out and "nomenclature_number" in out:
+                    out["nomenclature_no"] = out.get("nomenclature_number")
+                return out
+            return {}
+        except PermissionError:
+            raise
+        except Exception as e:
+            log.warning("assets_service.get_asset_by_uid failed (%s). Falling back to direct DB read.", e)
+
+    # 2) Fallback direct DB read (best-effort)
     try:
         from core.db import connect_db as _connect_db  # type: ignore
     except Exception:
@@ -291,7 +368,7 @@ def _read_asset_row(asset_uid: str) -> Dict[str, Any]:
         if not t:
             return {}
 
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(assets);").fetchall()]
+        cols = [r[1] for r in conn.execute('PRAGMA table_info("assets");').fetchall()]
         if "asset_uid" not in cols:
             return {}
 
@@ -557,10 +634,32 @@ def _wire_table_full_copy(table: QTableWidget) -> None:
 
 
 def _load_timeline_rows(asset_uid: str, limit: int = 400) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    Prefer core.db.list_asset_events_db (asset_events tabela).
+    Fallback: legacy auto-detekcija tabela.
+    """
     au = (asset_uid or "").strip()
     if not au:
         return [], "Nema asset_uid."
 
+    # 1) Prefer core.db API
+    try:
+        from core.db import list_asset_events_db  # type: ignore
+        rows = list_asset_events_db(au, limit=int(limit)) or []
+        out: List[Dict[str, Any]] = []
+        for rr in rows:
+            out.append({
+                "event_time": rr.get("event_time", ""),
+                "actor": rr.get("actor", ""),
+                "event_type": rr.get("event_type", ""),
+                "details": rr.get("data_json", rr.get("data", "")),
+                "source": rr.get("source", ""),
+            })
+        return out, f"asset_events: {len(out)} događaja"
+    except Exception:
+        pass
+
+    # 2) Legacy fallback: direct SQL scan
     db_path = _resolve_db_path()
     if not db_path.exists():
         return [], "DB nije pronađena."
@@ -593,7 +692,7 @@ def _load_timeline_rows(asset_uid: str, limit: int = 400) -> Tuple[List[Dict[str
         return ""
 
     try:
-        candidates = ["audit_log", "events", "asset_events", "timeline"]
+        candidates = ["asset_events", "audit_log", "events", "timeline"]
         tname = next((t for t in candidates if table_exists(t)), "")
         if not tname:
             return [], "Timeline tabela nije pronađena."
@@ -603,7 +702,7 @@ def _load_timeline_rows(asset_uid: str, limit: int = 400) -> Tuple[List[Dict[str
         col_ts = pick(["created_at", "ts", "timestamp", "time", "event_time"], c)
         col_actor = pick(["actor", "user", "username", "performed_by", "by_user", "who"], c)
         col_action = pick(["action", "event", "event_type", "type", "op", "operation", "verb"], c)
-        col_details = pick(["details", "detail", "message", "payload", "data", "note", "changes", "description"], c)
+        col_details = pick(["details", "detail", "message", "payload", "data_json", "data", "note", "changes", "description"], c)
 
         if not col_asset:
             return [], f"Timeline tabela '{tname}' nema asset_uid kolonu."
@@ -676,14 +775,16 @@ class _PreviewWorker(QObject):
         except Exception:
             pass
 
+# (FILENAME: ui/asset_detail_dialog.py - END PART 1/4)
 
-# -------------------- UI --------------------
+
+# FILENAME: ui/asset_detail_dialog.py
+# (FILENAME: ui/asset_detail_dialog.py - START PART 2/4)
 
 class AssetDetailDialog(QDialog):
     def __init__(self, asset_uid: str, parent=None):
         super().__init__(parent)
 
-        # stabilnost instance + QSS targetiranje
         self.setObjectName("AssetDetailDialog")
         try:
             self.setAttribute(Qt.WA_DeleteOnClose, True)
@@ -740,16 +841,20 @@ class AssetDetailDialog(QDialog):
         self.lb_status = QLabel("")
         self.lb_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
+        self.lb_disposal = QLabel("")  # disposal badge
+        self.lb_disposal.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.lb_disposal.setStyleSheet("color:#999; font-weight:600;")
+
         self.lb_cat = QLabel("")
         self.lb_cat.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
         self.lb_nom = QLabel("")
         self.lb_nom.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
-        self.btn_scrap = QPushButton("Rashoduj")
-        self.btn_scrap.setToolTip("Postavlja status sredstva na 'scrapped'.")
-        self.btn_scrap.clicked.connect(self._toggle_scrap_restore)
-        self.btn_scrap.setEnabled(_can_asset_edit())
+        self.btn_scrap = QPushButton("Rashod")
+        self.btn_scrap.setToolTip("Rashod workflow (Priprema/Odobri/Rashoduj) + legacy fallback.")
+        self.btn_scrap.clicked.connect(self._open_disposal_menu)
+        self.btn_scrap.setEnabled(_can_asset_edit() or _can_disposal_prepare() or _can_disposal_dispose())
         self.btn_scrap.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         self.btn_edit = QPushButton("Izmeni")
@@ -773,7 +878,7 @@ class AssetDetailDialog(QDialog):
         self.lb_missing.setStyleSheet(f"color:{_MISSING_COLOR}; font-weight:600;")
 
         for w in (
-            self.lb_name, self.lb_status, self.lb_cat, self.lb_nom,
+            self.lb_name, self.lb_status, self.lb_disposal, self.lb_cat, self.lb_nom,
             self.lb_toc, self.lb_sn, self.lb_holder, self.lb_loc,
             self.lb_created, self.lb_updated, self.lb_sector,
             self.lb_is_metro, self.lb_inventory
@@ -790,6 +895,9 @@ class AssetDetailDialog(QDialog):
         hg.addWidget(_k("Status"), r, 2); hg.addWidget(self.lb_status, r, 3)
         hg.addWidget(self.btn_scrap, r, 4)
         hg.addWidget(self.btn_edit, r, 5)
+        r += 1
+
+        hg.addWidget(_k("Rashod"), r, 0); hg.addWidget(self.lb_disposal, r, 1, 1, 5)
         r += 1
 
         hg.addWidget(_k("Naziv"), r, 0); hg.addWidget(self.lb_name, r, 1, 1, 5)
@@ -834,7 +942,7 @@ class AssetDetailDialog(QDialog):
         self._build_calendar_tab()
         self._build_metrology_tab()
         self._build_custom_fields_tab()
-        self._build_attachments_tab()  # ✅ KRITIČAN FIX
+        self._build_attachments_tab()  # ✅ sada je kompletno i stabilno
 
         self.tabs.addTab(self.details_tab, "Detalji")
         self.tabs.addTab(self.timeline_tab, "Timeline")
@@ -843,7 +951,6 @@ class AssetDetailDialog(QDialog):
         self.tabs.addTab(self.custom_tab, "Dodatna polja")
         self.tabs.addTab(self.attach_tab, "Prilozi")
 
-        # bottom buttons
         self.btns = QDialogButtonBox(QDialogButtonBox.Close)
         close_btn = self.btns.button(QDialogButtonBox.Close)
         if close_btn is not None:
@@ -856,7 +963,12 @@ class AssetDetailDialog(QDialog):
         root.addWidget(self.tabs, 1)
         root.addWidget(self.btns)
 
-        self._reload_all()
+        # SECURITY: ako nema pristup asset-u, zatvori dijalog fail-closed
+        try:
+            self._reload_all()
+        except PermissionError as e:
+            QMessageBox.warning(self, "RBAC / Scope", f"Nemaš pravo da vidiš ovo sredstvo.\n\n{e}")
+            QTimer.singleShot(0, self.reject)
 
     # -------------------- window chrome / persist --------------------
 
@@ -886,8 +998,6 @@ class AssetDetailDialog(QDialog):
             return
 
         restored_geo = False
-        restored_cal_split = False
-        restored_att_split = False
 
         try:
             geo_norm = _qvariant_to_bytearray(self._qs.value(self._settings_key("normal_geometry"), None))
@@ -918,7 +1028,6 @@ class AssetDetailDialog(QDialog):
                 st = _qvariant_to_bytearray(self._qs.value(self._settings_key("split_calendar"), None))
                 if st and len(st) > 4:
                     self._cal_split.restoreState(st)
-                    restored_cal_split = True
         except Exception:
             pass
 
@@ -927,7 +1036,6 @@ class AssetDetailDialog(QDialog):
                 st = _qvariant_to_bytearray(self._qs.value(self._settings_key("split_attachments"), None))
                 if st and len(st) > 4:
                     self._att_split.restoreState(st)
-                    restored_att_split = True
         except Exception:
             pass
 
@@ -951,7 +1059,7 @@ class AssetDetailDialog(QDialog):
                     pass
 
             try:
-                if (self._cal_split is not None) and (not restored_cal_split):
+                if self._cal_split is not None:
                     sizes = self._qs.value("cal_split_sizes", None)
                     if sizes and isinstance(sizes, (list, tuple)) and len(sizes) >= 2:
                         self._cal_split.setSizes([int(x) for x in sizes])
@@ -959,7 +1067,7 @@ class AssetDetailDialog(QDialog):
                 pass
 
             try:
-                if (self._att_split is not None) and (not restored_att_split):
+                if self._att_split is not None:
                     sizes = self._qs.value("att_split_sizes", None)
                     if sizes and isinstance(sizes, (list, tuple)) and len(sizes) >= 2:
                         self._att_split.setSizes([int(x) for x in sizes])
@@ -1183,6 +1291,11 @@ class AssetDetailDialog(QDialog):
         lay.addWidget(box)
         lay.addStretch(1)
 
+# (FILENAME: ui/asset_detail_dialog.py - END PART 2/4)
+
+# FILENAME: ui/asset_detail_dialog.py
+# (FILENAME: ui/asset_detail_dialog.py - START PART 3/4)
+
     def _build_timeline_tab(self) -> None:
         lay = QVBoxLayout(self.timeline_tab)
 
@@ -1319,7 +1432,7 @@ class AssetDetailDialog(QDialog):
         lay.addWidget(self.custom_box, 1)
         lay.addStretch(1)
 
-    # ✅ KRITIČAN FIX: builder za priloze
+    # ✅ Prilozi tab (UI builder) — metode za akcije/preview su u Part 4
     def _build_attachments_tab(self) -> None:
         lay = QVBoxLayout(self.attach_tab)
 
@@ -1378,10 +1491,10 @@ class AssetDetailDialog(QDialog):
             pass
 
         self.tbl.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tbl.customContextMenuRequested.connect(self._on_tbl_context_menu)
+        self.tbl.customContextMenuRequested.connect(self._on_tbl_context_menu)  # ✅ FIX: metoda postoji u Part 4
 
         # preview + find
-        self.preview_stack = QTabWidget()  # 0=Info, 1=Slika, 2=Tekst
+        self.preview_stack = QTabWidget()
         self.preview_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.ed_find = QLineEdit()
@@ -1509,7 +1622,8 @@ class AssetDetailDialog(QDialog):
     # -------------------- reload --------------------
 
     def _reload_all(self) -> None:
-        self._load_asset()
+        self._load_asset()  # može baciti PermissionError (fail-closed)
+        self._refresh_disposal_badge()
         self._load_timeline()
         self._apply_calendar_scope_ui()
         self._load_calendar_for_selected_date()
@@ -1563,6 +1677,11 @@ class AssetDetailDialog(QDialog):
 
     def _load_asset(self) -> None:
         self._asset_row = _read_asset_row(self.asset_uid) or {}
+        if not self._asset_row:
+            raise PermissionError("Sredstvo nije pronađeno ili nije dostupno u scope-u.")
+
+        if (not str(self._asset_row.get("nomenclature_no") or "").strip()) and str(self._asset_row.get("nomenclature_number") or "").strip():
+            self._asset_row["nomenclature_no"] = self._asset_row.get("nomenclature_number")
 
         self.lb_uid.setText(self.asset_uid)
         self._set_text_or_dash(self.lb_name, self._asset_row.get("name", ""))
@@ -1606,7 +1725,6 @@ class AssetDetailDialog(QDialog):
             pass
 
         self._apply_missing_warnings()
-        self._sync_scrap_button_state()
 
         try:
             self.btn_edit.setEnabled(_can_asset_edit() and (AssetEditDialog is not None))
@@ -1615,23 +1733,309 @@ class AssetDetailDialog(QDialog):
         except Exception:
             pass
 
-    def _sync_scrap_button_state(self) -> None:
-        st = str(self._asset_row.get("status", "") or "").strip().lower()
-        can_edit = _can_asset_edit()
-        if st == "scrapped":
-            self.btn_scrap.setText("Vrati u aktivno")
-            self.btn_scrap.setToolTip("Vraća status sredstva na 'active'.")
-            self.btn_scrap.setEnabled(can_edit)
-        else:
-            self.btn_scrap.setText("Rashoduj")
-            self.btn_scrap.setToolTip("Postavlja status sredstva na 'scrapped'.")
-            self.btn_scrap.setEnabled(can_edit)
+        try:
+            self.btn_scrap.setEnabled(_can_asset_edit() or _can_disposal_prepare() or _can_disposal_dispose())
+        except Exception:
+            pass
 
-    # -------------------- header actions --------------------
+    # -------------------- disposal badge + menu --------------------
+
+    def _get_open_disposal_case_db(self) -> Optional[Dict[str, Any]]:
+        db_path = _resolve_db_path()
+        if not db_path.exists():
+            return None
+        try:
+            conn = sqlite3.connect(db_path.as_posix())
+            conn.row_factory = sqlite3.Row
+        except Exception:
+            return None
+        try:
+            t = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='disposal_cases' LIMIT 1;").fetchone()
+            if not t:
+                return None
+            row = conn.execute(
+                """
+                SELECT disposal_id, created_at, asset_uid, status, prepared_by, reason, notes, approved_by, approved_at,
+                       disposed_by, disposed_at, disposed_doc_no, source
+                FROM disposal_cases
+                WHERE asset_uid=? AND status IN ('PREPARED','APPROVED')
+                ORDER BY created_at DESC, disposal_id DESC
+                LIMIT 1;
+                """,
+                (self.asset_uid,),
+            ).fetchone()
+            if not row:
+                return None
+            return {k: row[k] for k in row.keys()}
+        except Exception:
+            return None
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _refresh_disposal_badge(self) -> None:
+        st_asset = str(self._asset_row.get("status") or "").strip().lower()
+        if st_asset == "scrapped":
+            self.lb_disposal.setText("ZAVRŠENO: sredstvo je rashodovano (status=scrapped).")
+            self.lb_disposal.setStyleSheet("color:#e67e22; font-weight:700;")
+            return
+
+        case = self._get_open_disposal_case_db()
+        if not case:
+            self.lb_disposal.setText("Nema otvorene pripreme za rashod.")
+            self.lb_disposal.setStyleSheet("color:#999; font-weight:600;")
+            return
+
+        st = str(case.get("status") or "").strip().upper()
+        did = int(case.get("disposal_id") or 0)
+
+        if st == "PREPARED":
+            self.lb_disposal.setText(f"OTVORENO: PRIPREMLJENO (case #{did}) — čeka odobrenje.")
+            self.lb_disposal.setStyleSheet("color:#f1c40f; font-weight:700;")
+        elif st == "APPROVED":
+            self.lb_disposal.setText(f"OTVORENO: ODOBRENO (case #{did}) — spremno za finalni rashod.")
+            self.lb_disposal.setStyleSheet("color:#2ecc71; font-weight:700;")
+        else:
+            self.lb_disposal.setText(f"Otvoreno: {st} (case #{did})")
+            self.lb_disposal.setStyleSheet("color:#999; font-weight:600;")
+
+    def _open_disposal_menu(self) -> None:
+        m = QMenu(self)
+
+        st_asset = str(self._asset_row.get("status") or "").strip().lower()
+        case = self._get_open_disposal_case_db()
+
+        if st_asset == "scrapped":
+            a_restore = m.addAction("Vrati u aktivno (legacy)")
+            a_restore.setEnabled(_can_asset_edit())
+            act = m.exec(self.btn_scrap.mapToGlobal(self.btn_scrap.rect().bottomLeft()))
+            if act == a_restore:
+                self._legacy_restore_active()
+            return
+
+        a_prepare = m.addAction("Priprema za rashod…")
+        a_prepare.setEnabled(_can_disposal_prepare())
+
+        a_approve = m.addAction("Odobri rashod")
+        a_approve.setEnabled(False)
+
+        a_dispose = m.addAction("Rashoduj (final)")
+        a_dispose.setEnabled(False)
+
+        a_cancel = m.addAction("Otkaži pripremu")
+        a_cancel.setEnabled(False)
+
+        m.addSeparator()
+
+        a_legacy_scrap = m.addAction("Rashoduj odmah (legacy)")
+        a_legacy_scrap.setToolTip("Direktno postavlja status sredstva na 'scrapped' (bez disposal case-a).")
+        a_legacy_scrap.setEnabled(_can_asset_edit() and _can_disposal_dispose())
+
+        if case:
+            st = str(case.get("status") or "").strip().upper()
+            did = int(case.get("disposal_id") or 0)
+            if st == "PREPARED":
+                a_approve.setEnabled(_can_disposal_approve())
+                a_cancel.setEnabled(_can_disposal_prepare())
+                a_prepare.setEnabled(False)
+                a_prepare.setText(f"Priprema… (case #{did} već postoji)")
+            elif st == "APPROVED":
+                a_dispose.setEnabled(_can_disposal_dispose())
+                a_cancel.setEnabled(_can_disposal_prepare())
+                a_prepare.setEnabled(False)
+                a_prepare.setText(f"Priprema… (case #{did} već postoji)")
+
+        act = m.exec(self.btn_scrap.mapToGlobal(self.btn_scrap.rect().bottomLeft()))
+        if act is None:
+            return
+
+        if act == a_prepare:
+            self._ui_prepare_disposal()
+        elif act == a_approve:
+            self._ui_approve_disposal(case)
+        elif act == a_dispose:
+            self._ui_dispose_from_case(case)
+        elif act == a_cancel:
+            self._ui_cancel_disposal(case)
+        elif act == a_legacy_scrap:
+            self._legacy_scrap()
+
+# (FILENAME: ui/asset_detail_dialog.py - END PART 3/4)
+
+# FILENAME: ui/asset_detail_dialog.py
+# (FILENAME: ui/asset_detail_dialog.py - START PART 4/4)
+
+    # -------------------- disposal actions --------------------
+
+    def _ui_prepare_disposal(self) -> None:
+        if not _can_disposal_prepare():
+            QMessageBox.warning(self, "RBAC", "Nemaš pravo: disposal.prepare")
+            return
+
+        reason, ok = QInputDialog.getText(self, "Priprema za rashod", "Razlog (kratko):")
+        if not ok:
+            return
+        notes, ok2 = QInputDialog.getMultiLineText(self, "Priprema za rashod", "Napomena (opciono):", "")
+        if not ok2:
+            return
+
+        try:
+            if svc_prepare_disposal is None:
+                raise RuntimeError("prepare_disposal nije dostupan (services/assets_service.py).")
+            _ = svc_prepare_disposal(  # type: ignore[misc]
+                asset_uid=self.asset_uid,
+                reason=(reason or "").strip(),
+                notes=(notes or "").strip(),
+                data=None,
+                source="ui_asset_detail.prepare_disposal",
+            )
+            QMessageBox.information(self, "OK", "Priprema je otvorena (PREPARED).")
+            self._reload_all()
+        except Exception as e:
+            QMessageBox.critical(self, "Greška", f"Ne mogu da pripremim rashod.\n\n{e}")
+
+    def _ui_approve_disposal(self, case: Optional[Dict[str, Any]]) -> None:
+        if not case:
+            QMessageBox.information(self, "Info", "Nema otvorenog slučaja.")
+            return
+        if not _can_disposal_approve():
+            QMessageBox.warning(self, "RBAC", "Nemaš pravo: disposal.approve")
+            return
+
+        did = int(case.get("disposal_id") or 0)
+        if did <= 0:
+            QMessageBox.warning(self, "Greška", "Neispravan disposal_id.")
+            return
+
+        reply = QMessageBox.question(self, "Potvrda", f"Odobriti rashod? (case #{did})", QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            if svc_approve_disposal is None:
+                raise RuntimeError("approve_disposal nije dostupan (services/assets_service.py).")
+            svc_approve_disposal(disposal_id=did, source="ui_asset_detail.approve_disposal")  # type: ignore[misc]
+            QMessageBox.information(self, "OK", "Rashod odobren (APPROVED).")
+            self._reload_all()
+        except Exception as e:
+            QMessageBox.critical(self, "Greška", f"Ne mogu da odobrim.\n\n{e}")
+
+    def _ui_cancel_disposal(self, case: Optional[Dict[str, Any]]) -> None:
+        if not case:
+            QMessageBox.information(self, "Info", "Nema otvorenog slučaja.")
+            return
+        if not _can_disposal_prepare():
+            QMessageBox.warning(self, "RBAC", "Nemaš pravo: disposal.prepare")
+            return
+
+        did = int(case.get("disposal_id") or 0)
+        if did <= 0:
+            QMessageBox.warning(self, "Greška", "Neispravan disposal_id.")
+            return
+
+        why, ok = QInputDialog.getText(self, "Otkaži pripremu", "Razlog otkaza (opciono):")
+        if not ok:
+            return
+
+        reply = QMessageBox.question(self, "Potvrda", f"Otkazati pripremu? (case #{did})", QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            if svc_cancel_disposal is None:
+                raise RuntimeError("cancel_disposal nije dostupan (services/assets_service.py).")
+            svc_cancel_disposal(disposal_id=did, reason=(why or "").strip(), source="ui_asset_detail.cancel_disposal")  # type: ignore[misc]
+            QMessageBox.information(self, "OK", "Priprema otkazana (CANCELLED).")
+            self._reload_all()
+        except Exception as e:
+            QMessageBox.critical(self, "Greška", f"Ne mogu da otkažem.\n\n{e}")
+
+    def _ui_dispose_from_case(self, case: Optional[Dict[str, Any]]) -> None:
+        if not case:
+            QMessageBox.information(self, "Info", "Nema otvorenog slučaja.")
+            return
+        if not _can_disposal_dispose():
+            QMessageBox.warning(self, "RBAC", "Nemaš pravo: disposal.dispose")
+            return
+
+        did = int(case.get("disposal_id") or 0)
+        if did <= 0:
+            QMessageBox.warning(self, "Greška", "Neispravan disposal_id.")
+            return
+
+        doc_no, ok = QInputDialog.getText(self, "Final rashod", "Broj dokumenta (opciono):")
+        if not ok:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Potvrda",
+            f"Finalno rashodovati sredstvo? (case #{did})\n\nOvo postavlja status na 'scrapped'.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            if svc_dispose_from_case is None:
+                raise RuntimeError("dispose_from_case nije dostupan (services/assets_service.py).")
+            svc_dispose_from_case(  # type: ignore[misc]
+                disposal_id=did,
+                disposed_doc_no=(doc_no or "").strip(),
+                source="ui_asset_detail.dispose_from_case",
+            )
+            QMessageBox.information(self, "OK", "Sredstvo rashodovano (DISPOSED + status scrapped).")
+            self._reload_all()
+        except Exception as e:
+            QMessageBox.critical(self, "Greška", f"Ne mogu da rashodujem.\n\n{e}")
+
+    def _legacy_scrap(self) -> None:
+        if not (_can_asset_edit() and _can_disposal_dispose()):
+            QMessageBox.warning(self, "RBAC", "Nemaš pravo (assets.edit + disposal.dispose).")
+            return
+        reply = QMessageBox.question(
+            self,
+            "Legacy rashod",
+            "Rashodovati odmah (legacy)?\n\nDirektno status -> 'scrapped', bez disposal case-a.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            from core.db import update_asset_db  # type: ignore
+            update_asset_db(actor=actor_name(), asset_uid=self.asset_uid, status="scrapped", source="ui_asset_detail_legacy_scrap")
+            QMessageBox.information(self, "OK", "Sredstvo rashodovano (legacy).")
+            self._reload_all()
+        except Exception as e:
+            QMessageBox.critical(self, "Greška", f"Ne mogu da promenim status.\n\n{e}")
+
+    def _legacy_restore_active(self) -> None:
+        if not _can_asset_edit():
+            QMessageBox.warning(self, "RBAC", "Nemaš pravo (assets.edit).")
+            return
+        reply = QMessageBox.question(
+            self,
+            "Povratak",
+            "Vratiti sredstvo u aktivno stanje (legacy)?\n\nStatus -> 'active'.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            from core.db import update_asset_db  # type: ignore
+            update_asset_db(actor=actor_name(), asset_uid=self.asset_uid, status="active", source="ui_asset_detail_legacy_restore")
+            QMessageBox.information(self, "OK", "Sredstvo vraćeno u aktivno.")
+            self._reload_all()
+        except Exception as e:
+            QMessageBox.critical(self, "Greška", f"Ne mogu da promenim status.\n\n{e}")
+
+    # -------------------- edit asset --------------------
 
     def _edit_asset(self) -> None:
         if not _can_asset_edit():
-            QMessageBox.warning(self, "Zabranjeno", "Nemaš pravo da menjaš detalje sredstava.")
+            QMessageBox.warning(self, "Zabranjeno", "Nemaš pravo za izmenu.")
             return
 
         if AssetEditDialog is None:
@@ -1642,7 +2046,6 @@ class AssetDetailDialog(QDialog):
             return
 
         try:
-            # ✅ pre-populate ako dijalog podržava `initial`
             try:
                 dlg = AssetEditDialog(self.asset_uid, initial=dict(self._asset_row), parent=self)  # type: ignore[misc]
             except TypeError:
@@ -1658,48 +2061,6 @@ class AssetDetailDialog(QDialog):
                 self._reload_all()
         except Exception as e:
             QMessageBox.critical(self, "Greška", f"Ne mogu da otvorim izmenu.\n\n{e}")
-
-    def _toggle_scrap_restore(self) -> None:
-        if not _can_asset_edit():
-            QMessageBox.warning(self, "Zabranjeno", "Nemaš pravo da menjaš status sredstava.")
-            return
-
-        st = str(self._asset_row.get("status", "") or "").strip().lower()
-
-        if st == "scrapped":
-            reply = QMessageBox.question(
-                self,
-                "Potvrda povratka",
-                "Vratiti sredstvo iz rashoda u aktivno stanje?\n\nStatus će biti postavljen na 'active'.",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
-                return
-            new_status = "active"
-            ok_msg = "Sredstvo je vraćeno u aktivno stanje."
-            src = "ui_asset_detail_restore_active"
-        else:
-            reply = QMessageBox.question(
-                self,
-                "Potvrda rashoda",
-                "Rashodovati sredstvo?\n\nStatus će biti postavljen na 'scrapped'.",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
-                return
-            new_status = "scrapped"
-            ok_msg = "Sredstvo je rashodovano."
-            src = "ui_asset_detail_scrap"
-
-        try:
-            from core.db import update_asset_db  # type: ignore
-            update_asset_db(actor=actor_name(), asset_uid=self.asset_uid, status=new_status, source=src)
-            QMessageBox.information(self, "OK", ok_msg)
-        except Exception as e:
-            QMessageBox.critical(self, "Greška", f"Ne mogu da promenim status sredstva.\n\n{e}")
-            return
-
-        self._reload_all()
 
     # -------------------- timeline --------------------
 
@@ -1726,20 +2087,18 @@ class AssetDetailDialog(QDialog):
             self.tbl_tl.setSortingEnabled(False)
             self.tbl_tl.setRowCount(0)
 
-            when_key = actor_key = action_key = detail_key = ""
-            if rows:
-                keys = list(rows[0].keys())
+            keys = list(rows[0].keys()) if rows else []
 
-                def pick(*cands: str) -> str:
-                    for c in cands:
-                        if c in keys:
-                            return c
-                    return ""
+            def pick(*cands: str) -> str:
+                for c in cands:
+                    if c in keys:
+                        return c
+                return ""
 
-                when_key = pick("created_at", "ts", "timestamp", "time", "event_time", "dt")
-                actor_key = pick("actor", "user", "username", "performed_by", "by_user", "who")
-                action_key = pick("action", "event", "event_type", "type", "op", "operation", "verb")
-                detail_key = pick("details", "detail", "message", "payload", "data", "note", "changes", "description")
+            when_key = pick("event_time", "created_at", "ts", "timestamp", "time")
+            actor_key = pick("actor", "user", "username", "performed_by", "by_user", "who")
+            action_key = pick("event_type", "action", "event", "type", "op")
+            detail_key = pick("details", "detail", "message", "payload", "data_json", "data", "note", "changes", "description")
 
             for rr in rows:
                 i = self.tbl_tl.rowCount()
@@ -1814,7 +2173,7 @@ class AssetDetailDialog(QDialog):
             self.btn_met_refresh.setEnabled(False)
             self.tbl_met.setEnabled(False)
             self.btn_met_open.setEnabled(False)
-            self.lb_met_info.setText("Nemaš pravo za metrologiju (metrology.view).")
+            self.lb_met_info.setText("Nemaš pravo (metrology.view).")
             return
 
         self.cb_met_warn.setEnabled(True)
@@ -1827,10 +2186,10 @@ class AssetDetailDialog(QDialog):
         elif self._can_sector_scope_metrology():
             base = "Metrologija: sektor-scope."
         else:
-            base = "Metrologija: scope enforced u servisu (MY/sector/manage)."
+            base = "Metrologija: scope enforced u servisu."
 
         if not is_m:
-            base += " | Napomena: sredstvo nije označeno kao metrologija (flag=NE)."
+            base += " | Napomena: flag=NE."
 
         self.lb_met_info.setText(base)
 
@@ -1884,7 +2243,7 @@ class AssetDetailDialog(QDialog):
             self.lb_met_info.setText((base + " | " if base else "") + f"Zapisa: {len(rows)}")
         except PermissionError:
             rows = []
-            self.lb_met_info.setText("Nemaš pravo za metrologiju (RBAC scope u servisu).")
+            self.lb_met_info.setText("Nemaš pravo (RBAC scope u servisu).")
         except Exception as e:
             rows = []
             self.lb_met_info.setText(f"Greška: {e}")
@@ -1972,7 +2331,6 @@ class AssetDetailDialog(QDialog):
                 self.tbl_cal.setEnabled(False)
             except Exception:
                 pass
-
             msg = "Kalendar modul nije dostupan."
             if _CAL_IMPORT_ERR:
                 msg += f" ({_CAL_IMPORT_ERR})"
@@ -2101,7 +2459,7 @@ class AssetDetailDialog(QDialog):
                 return
             tm = (tm or "").strip()
             if not self._is_valid_time_hhmm(tm):
-                QMessageBox.warning(self, "Vreme", "Neispravan format vremena. Koristi HH:MM (npr. 09:30) ili ostavi prazno.")
+                QMessageBox.warning(self, "Vreme", "Neispravan format. Koristi HH:MM ili ostavi prazno.")
                 return
 
             add_calendar_event_for_asset(  # type: ignore[misc]
@@ -2146,7 +2504,7 @@ class AssetDetailDialog(QDialog):
 
             tm = (tm or "").strip()
             if not self._is_valid_time_hhmm(tm):
-                QMessageBox.warning(self, "Vreme", "Neispravan format vremena. Koristi HH:MM (npr. 09:30) ili ostavi prazno.")
+                QMessageBox.warning(self, "Vreme", "Neispravan format. Koristi HH:MM ili prazno.")
                 return
 
             update_calendar_event(  # type: ignore[misc]
@@ -2169,7 +2527,7 @@ class AssetDetailDialog(QDialog):
             QMessageBox.information(self, "Info", "Prvo izaberi događaj u tabeli.")
             return
 
-        reply = QMessageBox.question(self, "Potvrda brisanja", "Obrisati događaj iz kalendara?", QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(self, "Potvrda brisanja", "Obrisati događaj?", QMessageBox.Yes | QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
 
@@ -2271,7 +2629,9 @@ class AssetDetailDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Greška", f"Ne mogu da sačuvam dodatna polja.\n\n{e}")
 
-    # -------------------- attachments --------------------
+    # ============================
+    # ATTACHMENTS (FIXED + FULL)
+    # ============================
 
     def _selected_attachment_row(self) -> Optional[Dict[str, Any]]:
         try:
@@ -2758,6 +3118,7 @@ class AssetDetailDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Greška", f"Ne mogu da obrišem prilog.\n\n{e}")
 
+    # ✅ FIX: metod koji ti je falio (i koji je rušio dijalog)
     def _on_tbl_context_menu(self, pos) -> None:
         r = _current_row_any(self.tbl)
         if r < 0:
@@ -2977,4 +3338,4 @@ class AssetDetailDialog(QDialog):
             pass
         super().keyPressEvent(event)
 
-# END FILENAME: ui/asset_detail_dialog.py
+# (FILENAME: ui/asset_detail_dialog.py - END PART 4/4)

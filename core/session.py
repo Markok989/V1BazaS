@@ -10,15 +10,11 @@ SEC principles:
 - FAIL-CLOSED: can()/must() deny when not logged in.
 - active_role is canonical and MUST be one of assigned roles.
 - active_scope is session state (single source of truth); non-admin cannot keep ALL.
-- No disk persistence.
+- SECTOR scope is meaningful only if a sector identifier exists in session; require_sector() fails otherwise.
 
 Scope policy:
-- ADMIN defaults to ALL
-- non-admin defaults to SECTOR (safer against cross-sector data leak)
-
-Important:
-- "SECTOR" scope is meaningful only if a sector identifier exists in session.
-  If sector is missing, services should call require_sector() and fail-closed.
+- Admin-like roles default to ALL
+- Non-admin defaults to SECTOR (safer against cross-sector data leak)
 """
 
 from __future__ import annotations
@@ -54,16 +50,19 @@ except Exception:  # pragma: no cover
 
 ROLE_READONLY = "READONLY"
 ROLE_ADMIN = "ADMIN"
+ROLE_GLOBAL_ADMIN = "GLOBAL_ADMIN"
+ROLE_SUPERADMIN = "SUPERADMIN"
 
 SCOPE_ALL = "ALL"
 SCOPE_SECTOR = "SECTOR"
 SCOPE_MY = "MY"
+
 _VALID_SCOPES = {SCOPE_ALL, SCOPE_SECTOR, SCOPE_MY}
 
 _CURRENT_USER: Optional[Dict[str, Any]] = None
 _ACTIVE_SCOPE: Optional[str] = None
-
 _LOCK = RLock()
+
 _MAX_ROLES = 64
 
 
@@ -72,14 +71,17 @@ def _coerce_user_to_dict(u: Any) -> Optional[Dict[str, Any]]:
     """Coerce user -> dict (FAIL-CLOSED)."""
     if u is None:
         return None
+
     if isinstance(u, dict):
         return dict(u)
+
     if isinstance(u, Mapping):
         try:
             d = dict(u)
             return d if d else None
         except Exception:
             return None
+
     try:
         fn = getattr(u, "to_dict", None)
         if callable(fn):
@@ -88,12 +90,14 @@ def _coerce_user_to_dict(u: Any) -> Optional[Dict[str, Any]]:
                 return dict(d)
     except Exception:
         pass
+
     try:
         d = vars(u)
         if isinstance(d, dict) and d:
             return dict(d)
     except Exception:
         pass
+
     return None
 
 
@@ -126,6 +130,7 @@ def _canon_role(role: Any) -> str:
     s = str(role or "").strip()
     if not s:
         return ROLE_READONLY
+
     parts = _split_items(s)
     s0 = parts[0] if parts else s
 
@@ -179,7 +184,6 @@ def _pick_highest_role(roles: List[str]) -> str:
             return rr or ROLE_READONLY
         except Exception:
             pass
-    # fallback: prvi (posle normalizacije)
     return _canon_role(roles_n[0]) if roles_n else ROLE_READONLY
 
 
@@ -196,24 +200,20 @@ def _sync_role_keys(u: Dict[str, Any], role: str) -> None:
 def _ensure_roles_on_user(u: Dict[str, Any]) -> List[str]:
     """
     Ensure u['roles'] exists and is normalized.
-
-    Priority (safer + faster):
-      1) If u already has roles -> normalize and use it (avoid DB calls)
-      2) Else try core.rbac.list_assigned_roles(user) if available
-      3) Else roles/user_roles/rbac_roles/profiles
-      4) Fallback: active_role/role/...
+    Priority:
+      1) already-provided roles (login should provide)
+      2) core.rbac.list_assigned_roles(user) if available
+      3) roles/user_roles/rbac_roles/profiles
+      4) fallback: active_role/role/...
     """
-    # 1) trust already-loaded roles (login should provide this)
     roles = _normalize_roles_value(u.get("roles"))
 
-    # 2) optional RBAC helper
     if not roles and callable(_rbac_list_assigned_roles):
         try:
             roles = list(_rbac_list_assigned_roles(u) or [])
         except Exception:
             roles = []
 
-    # 3) other keys
     if not roles:
         v = u.get("user_roles")
         if v is None:
@@ -224,7 +224,6 @@ def _ensure_roles_on_user(u: Dict[str, Any]) -> List[str]:
             v = u.get("roles")
         roles = _normalize_roles_value(v)
 
-    # 4) fallback
     if not roles:
         prim = _canon_role(_first_nonempty(u, ("active_role", "role", "user_role", "rbac_role", "profile")))
         roles = [prim] if prim else [ROLE_READONLY]
@@ -239,9 +238,13 @@ def _canon_scope(scope: Any) -> str:
     return s if s in _VALID_SCOPES else ""
 
 
-def _default_scope_for_role(role: str) -> str:
+def _is_admin_like(role: str) -> bool:
     r = _canon_role(role)
-    return SCOPE_ALL if r == ROLE_ADMIN else SCOPE_SECTOR
+    return r in (ROLE_ADMIN, ROLE_GLOBAL_ADMIN, ROLE_SUPERADMIN)
+
+
+def _default_scope_for_role(role: str) -> str:
+    return SCOPE_ALL if _is_admin_like(role) else SCOPE_SECTOR
 
 
 def _coerce_scope_for_role(scope: str, role: str) -> str:
@@ -249,7 +252,7 @@ def _coerce_scope_for_role(scope: str, role: str) -> str:
     sc = _canon_scope(scope)
     if not sc:
         return ""
-    if sc == SCOPE_ALL and _canon_role(role) != ROLE_ADMIN:
+    if sc == SCOPE_ALL and (not _is_admin_like(role)):
         return SCOPE_SECTOR
     return sc
 
@@ -306,7 +309,6 @@ def set_current_user(u: Optional[Any]) -> None:
     - set active_scope (policy + fail-safe)
     """
     global _CURRENT_USER, _ACTIVE_SCOPE
-
     coerced = _coerce_user_to_dict(u)
     with _LOCK:
         if not coerced:
@@ -321,6 +323,7 @@ def set_current_user(u: Optional[Any]) -> None:
         # active role selection (fail-safe)
         ar_raw = cur.get("active_role", None)
         ar = _canon_role(ar_raw) if str(ar_raw or "").strip() else ""
+
         if not ar:
             cand = _first_nonempty(cur, ("role", "user_role", "rbac_role", "profile"))
             ar = _canon_role(cand) if cand else ""
@@ -402,23 +405,25 @@ def actor_key() -> str:
 def current_sector() -> str:
     """
     Best-effort sector hint from session.
-    IMPORTANT: services should enforce sector filtering.
 
-    This tries multiple key variants commonly used across DB schemas.
+    IMPORTANT:
+    - Prefer string codes/names for matching assets.sector (TEXT).
+    - sector_id is still accepted as last fallback (some deployments store numeric sector as text).
     """
     u = _get_current_user_copy_locked() or {}
     keys = (
         "active_sector",
         "sector",
         "sector_code",
-        "sector_id",
-        "sectorId",
         "org_unit_code",
         "org_unit",
         "orgUnit",
         "department",
         "unit",
         "org",
+        # last resort (may be numeric):
+        "sector_id",
+        "sectorId",
     )
     return _first_nonempty(u, keys).strip()
 
@@ -456,9 +461,9 @@ def active_role() -> str:
             return ROLE_READONLY
 
         roles = _ensure_roles_on_user(_CURRENT_USER) or [ROLE_READONLY]
-
         ar_raw = _CURRENT_USER.get("active_role", None)
         ar = _canon_role(ar_raw) if str(ar_raw or "").strip() else ""
+
         if not ar:
             cand = _first_nonempty(_CURRENT_USER, ("role", "user_role", "rbac_role", "profile"))
             ar = _canon_role(cand) if cand else ""
@@ -520,13 +525,10 @@ def set_active_scope(scope: str, source: str = "ui", audit: bool = True) -> None
     with _LOCK:
         if not _CURRENT_USER:
             raise PermissionError("Nisi prijavljen.")
-
         old_sc = get_active_scope() or ""
         role = active_role()
-
-        if role != ROLE_ADMIN and new_sc == SCOPE_ALL:
+        if (not _is_admin_like(role)) and new_sc == SCOPE_ALL:
             raise PermissionError("Nemaš pravo na ALL scope.")
-
         global _ACTIVE_SCOPE
         _ACTIVE_SCOPE = new_sc
         _sync_scope_keys(_CURRENT_USER, new_sc, role=role)
@@ -543,13 +545,13 @@ def set_active_role(role: str, source: str = "ui", audit: bool = True) -> None:
     - Also enforces scope policy after switch (non-admin cannot keep ALL).
     """
     require_login("set_active_role")
-
     with _LOCK:
         if not _CURRENT_USER:
             raise PermissionError("Nisi prijavljen.")
 
         roles = _ensure_roles_on_user(_CURRENT_USER)
         new_role = _canon_role(role)
+
         if new_role not in roles:
             raise PermissionError(f"Nemaš rolu '{new_role}'. Dodeljene role: {roles}")
 
@@ -619,8 +621,7 @@ def require_sector(context: str = "") -> str:
 def get_scope_context() -> Dict[str, Any]:
     """
     Single payload services can use to build WHERE filters safely.
-
-    Example usage in services:
+    Example usage:
       ctx = session.get_scope_context()
       if ctx['scope'] == 'SECTOR': session.require_sector('assets.list')
     """
@@ -633,6 +634,7 @@ def get_scope_context() -> Dict[str, Any]:
             "sector": "",
             "sector_id": 0,
         }
+
     return {
         "logged_in": True,
         "user_id": current_user_id(),
@@ -645,87 +647,71 @@ def get_scope_context() -> Dict[str, Any]:
     }
 
 
+# -------------------- audit helpers (role/scope switches) --------------------
 def _audit_role_switch(old_role: str, new_role: str, source: str = "ui") -> None:
     try:
-        from core.db import connect_db, write_audit  # type: ignore
+        from core.db import db_conn, write_audit  # type: ignore
     except Exception:
         return
-    if not callable(connect_db) or not callable(write_audit):
+
+    if not callable(db_conn) or not callable(write_audit):
         return
 
-    payload = dict(
-        actor=actor_key(),
-        actor_name=actor_name(),
-        action="role.switch",
-        entity="session",
-        entity_id=str(current_user_id() or ""),
-        before_obj={"active_role": old_role, "active_scope": get_active_scope() or ""},
-        after_obj={"active_role": new_role, "active_scope": get_active_scope() or ""},
-        extra={"source": source},
-    )
-    _write_audit_best_effort(connect_db, write_audit, payload)
+    before_obj = {"active_role": old_role, "active_scope": get_active_scope() or ""}
+    after_obj = {"active_role": new_role, "active_scope": get_active_scope() or ""}
+    actor = actor_key()
+    entity_id = str(current_user_id() or "")
+
+    try:
+        with db_conn() as conn:
+            write_audit(
+                conn,
+                actor=actor,
+                entity="session",
+                entity_id=entity_id,
+                action="ROLE_SWITCH",
+                before_obj=before_obj,
+                after_obj=after_obj,
+                source=(source or "ui"),
+            )
+            try:
+                conn.commit()
+            except Exception:
+                pass
+    except Exception:
+        return
 
 
 def _audit_scope_switch(old_scope: str, new_scope: str, source: str = "ui") -> None:
     try:
-        from core.db import connect_db, write_audit  # type: ignore
+        from core.db import db_conn, write_audit  # type: ignore
     except Exception:
         return
-    if not callable(connect_db) or not callable(write_audit):
+
+    if not callable(db_conn) or not callable(write_audit):
         return
 
-    payload = dict(
-        actor=actor_key(),
-        actor_name=actor_name(),
-        action="scope.switch",
-        entity="session",
-        entity_id=str(current_user_id() or ""),
-        before_obj={"active_scope": old_scope, "active_role": active_role()},
-        after_obj={"active_scope": new_scope, "active_role": active_role()},
-        extra={"source": source, "sector": current_sector()},
-    )
-    _write_audit_best_effort(connect_db, write_audit, payload)
+    before_obj = {"active_scope": old_scope, "active_role": active_role()}
+    after_obj = {"active_scope": new_scope, "active_role": active_role(), "sector": current_sector()}
+    actor = actor_key()
+    entity_id = str(current_user_id() or "")
 
-
-def _write_audit_best_effort(connect_db: Any, write_audit: Any, payload: Dict[str, Any]) -> None:
-    """Centralized best-effort audit writer (never leaks exceptions)."""
     try:
-        obj = connect_db()
-
-        if isinstance(obj, sqlite3.Connection):
-            conn = obj
+        with db_conn() as conn:
+            write_audit(
+                conn,
+                actor=actor,
+                entity="session",
+                entity_id=entity_id,
+                action="SCOPE_SWITCH",
+                before_obj=before_obj,
+                after_obj=after_obj,
+                source=(source or "ui"),
+            )
             try:
-                _call_compatible(write_audit, conn=conn, **payload)
-                try:
-                    conn.commit()
-                except Exception:
-                    pass
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-            return
-
-        if hasattr(obj, "__enter__") and hasattr(obj, "__exit__"):
-            with obj as conn:
-                _call_compatible(write_audit, conn=conn, **payload)
-                try:
-                    conn.commit()
-                except Exception:
-                    pass
-            return
-
-        conn = obj
-        _call_compatible(write_audit, conn=conn, **payload)
-        try:
-            conn.commit()
-        except Exception:
-            pass
-        try:
-            conn.close()
-        except Exception:
-            pass
+                conn.commit()
+            except Exception:
+                pass
     except Exception:
         return
 
@@ -760,18 +746,18 @@ __all__ = [
 
 
 if __name__ == "__main__":  # pragma: no cover
-    # Minimal smoke-test (offline, no DB)
+    # Minimal smoke-test (offline, no DB needed; audit is best-effort)
     clear_current_user()
     assert is_logged_in() is False
     assert can("assets.view") is False
     assert effective_scope() == SCOPE_MY
 
     # non-admin defaults to SECTOR
-    set_current_user({"id": 1, "username": "m", "roles": ["READONLY"], "sector_id": 2})
+    set_current_user({"id": 1, "username": "m", "roles": ["READONLY"], "sector": "S2"})
     assert is_logged_in() is True
     assert active_role() == "READONLY"
     assert get_active_scope() == SCOPE_SECTOR
-    assert current_sector_id() == 2
+    assert current_sector() == "S2"
 
     # admin defaults to ALL
     set_current_user({"id": 2, "username": "a", "roles": ["ADMIN"]})
@@ -793,4 +779,5 @@ if __name__ == "__main__":  # pragma: no cover
         pass
 
     print("core/session.py smoke-test OK")
+
 # (FILENAME: core/session.py - END)
