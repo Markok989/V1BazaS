@@ -20,6 +20,10 @@ Senior rev (2026-02-26) — HARDENED:
 
 Output:
 - canonical nomenclature field (nomenclature_no + nomenclature_number).
+
+Patch (2026-02-26, disposal enablement):
+- FIX: prepare/approve/cancel/dispose fail-closed ako asset ne postoji ili nije vidljiv u scope-u.
+- NEW: get_open_disposal_case_for_asset() i list_disposal_queue() (UI tab “Priprema za rashod”).
 """
 
 from __future__ import annotations
@@ -76,6 +80,7 @@ except Exception:  # pragma: no cover
 
 
 _ASSETS_LIST_PERMS: List[str] = [PERM_ASSETS_VIEW, PERM_ASSETS_METRO_VIEW, PERM_ASSETS_MY_VIEW]
+_DISPOSAL_ANY_PERMS: List[str] = [PERM_DISPOSAL_PREPARE, PERM_DISPOSAL_APPROVE, PERM_DISPOSAL_DISPOSE]
 
 # -------------------- Scope normalization (UI <-> Service contract) --------------------
 SCOPE_AUTO = "AUTO"
@@ -196,7 +201,6 @@ def _session_user_id() -> int:
         from core.session import current_user_id  # type: ignore
         return int(current_user_id() or 0)
     except Exception:
-        # fallback: pokušaj iz user dict-a
         try:
             from core.session import get_current_user_copy  # type: ignore
             u = get_current_user_copy() or {}
@@ -446,7 +450,6 @@ def _security_scope_policy() -> str:
 
 
 # -------------------- MY scope helpers (DB-first, legacy fallback) --------------------
-# NEW canonical holder columns (from core/db.py v9)
 ASSET_HOLDER_USER_ID_COL = "current_holder_user_id"
 ASSET_HOLDER_KEY_COL = "current_holder_key"
 
@@ -746,9 +749,9 @@ def _ensure_schema_cache_current(conn, db_path: str) -> None:
         _SQLITE_SCHEMA_TOKEN[db_path] = tok
         return
     if old != tok:
-        for k in [k for k in _SQLITE_TABLE_EXISTS_CACHE.keys() if k[0] == db_path]:
+        for k in [k for k in list(_SQLITE_TABLE_EXISTS_CACHE.keys()) if k[0] == db_path]:
             _SQLITE_TABLE_EXISTS_CACHE.pop(k, None)
-        for k in [k for k in _SQLITE_COLS_CACHE.keys() if k[0] == db_path]:
+        for k in [k for k in list(_SQLITE_COLS_CACHE.keys()) if k[0] == db_path]:
             _SQLITE_COLS_CACHE.pop(k, None)
         _SQLITE_SCHEMA_TOKEN[db_path] = tok
 
@@ -822,7 +825,6 @@ def _sqlite_cols(conn, table: str) -> Set[str]:
     return set(out2)
 
 # (FILENAME: services/assets_service.py - END PART 1/2)
-
 
 # FILENAME: services/assets_service.py
 # (FILENAME: services/assets_service.py - START PART 2/2)
@@ -1102,7 +1104,6 @@ def _bulk_assets_metrology_flag(conn, uids: List[str]) -> Set[str]:
     if "asset_uid" not in cols or "is_metrology" not in cols:
         return out
 
-    # perf: bez temp tabele kad je malo UID-ova
     if len(uids) <= 900:
         qmarks = ",".join(["?"] * len(uids))
         try:
@@ -1345,7 +1346,6 @@ def _sqlite_build_where(
             )
             if c in cols
         ]
-        # user-id holder col is numeric; allow string LIKE fallback only if present (harmless)
         if ASSET_HOLDER_USER_ID_COL in cols:
             search_cols.append(f"CAST(COALESCE({ASSET_HOLDER_USER_ID_COL},'') AS TEXT)")
 
@@ -1390,12 +1390,16 @@ def create_asset(
     source: str = "assets_service.create_asset",
     **extra: Any,
 ) -> str:
+    """
+    Security: actor param se NE koristi kao identitet (anti-spoof).
+    Audit identitet se uzima iz sesije (_actor_name_for_audit()).
+    """
     _require_login("assets.create_asset")
     _require_perm(PERM_ASSETS_CREATE, "assets.create_asset")
 
+    _ = actor  # anti-spoof: namerno ignorišemo input actor, uzimamo iz session
     actor_eff = _actor_name_for_audit()
 
-    # compat normalization
     if toc is None and toc_number is not None:
         toc = str(toc_number).strip()
     if serial is None and serial_number is not None:
@@ -1421,8 +1425,6 @@ def create_asset(
         extra_dict[NOMENCLATURE_CANON_KEY] = nom
         extra_dict[NOMENCLATURE_LEGACY_KEY] = nom
 
-    # Sector assignment policy:
-    # - ako security scope nije ALL (non-admin), sektor uzimamo iz sesije (ignorišemo UI).
     sec_scope = _security_scope_policy()
     if sec_scope in ("SECTOR", "MY") and not _is_global_admin_like():
         sec = _require_sector("assets.create_asset")
@@ -1491,7 +1493,6 @@ def list_assets(
             category=(category or "SVE"),
             status=(status or "SVE"),
             limit=lim,
-            # DB-level sector filter samo kad smo u SECTOR security scope (perf)
             sector=_current_sector() if _security_scope_policy() == "SECTOR" else "SVE",
             metrology_only=bool(want_metro_requested),
         )
@@ -1681,7 +1682,17 @@ def list_assets_my(
 list_assets_my_brief = list_assets_my
 
 
-# -------------------- Disposal workflow (service wrappers) --------------------
+# -------------------- Disposal workflow (service wrappers + query helpers) --------------------
+_DISPOSAL_OPEN_STATUSES = ("PREPARED", "APPROVED")
+
+
+def _assert_asset_visible_or_raise(asset_uid: str, ctx: str) -> Dict[str, Any]:
+    a = get_asset_by_uid(asset_uid=asset_uid)
+    if not a:
+        raise PermissionError(f"Sredstvo nije pronađeno ili nije dostupno u scope-u. ({ctx})")
+    return a
+
+
 def _disposal_case_asset_uid(disposal_id: int) -> str:
     """
     Minimal helper da enforce-ujemo scope kod approve/cancel/dispose.
@@ -1691,7 +1702,6 @@ def _disposal_case_asset_uid(disposal_id: int) -> str:
     if did <= 0:
         raise ValueError("disposal_id must be > 0")
 
-    # Prefer sqlite direct (core.db nema read helper u ovom trenutku).
     try:
         with _sqlite_conn() as conn:
             if not _sqlite_table_exists(conn, "disposal_cases"):
@@ -1713,6 +1723,150 @@ def _disposal_case_asset_uid(disposal_id: int) -> str:
         raise RuntimeError(str(e)) from e
 
 
+def get_open_disposal_case_for_asset(
+    *,
+    asset_uid: str,
+    include_reason_notes: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """
+    Vraća poslednji OTVOREN disposal case za asset (PREPARED/APPROVED), ili None.
+
+    Security:
+    - traži login
+    - traži bar jedno disposal pravo (prepare/approve/dispose)
+    - traži da asset bude vidljiv u scope-u (get_asset_by_uid)
+    """
+    _require_login("assets.get_open_disposal_case_for_asset")
+    _require_perm_any(_DISPOSAL_ANY_PERMS, "assets.get_open_disposal_case_for_asset")
+
+    uid = (asset_uid or "").strip()
+    if not uid:
+        return None
+
+    _assert_asset_visible_or_raise(uid, "assets.get_open_disposal_case_for_asset")
+
+    try:
+        with _sqlite_conn() as conn:
+            if not _sqlite_table_exists(conn, "disposal_cases"):
+                return None
+
+            cols = _sqlite_cols(conn, "disposal_cases")
+            if "asset_uid" not in cols or "status" not in cols or "disposal_id" not in cols:
+                return None
+
+            sel = [
+                "disposal_id", "asset_uid", "status",
+                "created_at", "prepared_by",
+                "approved_by", "approved_at",
+                "disposed_by", "disposed_at",
+                "disposed_doc_no", "source",
+            ]
+            if include_reason_notes:
+                if "reason" in cols:
+                    sel.append("reason")
+                if "notes" in cols:
+                    sel.append("notes")
+
+            sql = (
+                f"SELECT {', '.join(sel)} FROM disposal_cases "
+                "WHERE asset_uid=? AND status IN ('PREPARED','APPROVED') "
+                "ORDER BY created_at DESC, disposal_id DESC LIMIT 1;"
+            )
+            row = conn.execute(sql, (uid,)).fetchone()
+            if not row:
+                return None
+            return {k: row[k] for k in row.keys()}
+    except Exception:
+        return None
+
+
+def list_disposal_queue(
+    *,
+    status: str = "OPEN",
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """
+    Lista “Priprema za rashod” za UI tab:
+    - OPEN => PREPARED + APPROVED
+    - PREPARED => samo PREPARED
+    - APPROVED => samo APPROVED
+
+    Output: kombinuje asset info + case info.
+    Security: fail-closed per asset (ne curi cross-scope).
+    """
+    _require_login("assets.list_disposal_queue")
+    _require_perm_any(_DISPOSAL_ANY_PERMS, "assets.list_disposal_queue")
+    _require_perm_any(_ASSETS_LIST_PERMS, "assets.list_disposal_queue.assets_view")
+
+    lim = _clamp_limit(limit, 500, min_v=1, max_v=5000)
+
+    st = (status or "OPEN").strip().upper()
+    if st == "PREPARED":
+        statuses = ("PREPARED",)
+    elif st == "APPROVED":
+        statuses = ("APPROVED",)
+    else:
+        statuses = _DISPOSAL_OPEN_STATUSES
+
+    out: List[Dict[str, Any]] = []
+    try:
+        with _sqlite_conn() as conn:
+            if not _sqlite_table_exists(conn, "disposal_cases"):
+                return []
+
+            cols = _sqlite_cols(conn, "disposal_cases")
+            if "disposal_id" not in cols or "asset_uid" not in cols or "status" not in cols:
+                return []
+
+            sel = [
+                "disposal_id", "asset_uid", "status",
+                "created_at", "prepared_by",
+                "approved_by", "approved_at",
+                "reason", "notes",
+                "source",
+            ]
+            sel = [c for c in sel if c in cols]
+
+            qmarks = ",".join(["?"] * len(statuses))
+            sql = (
+                f"SELECT {', '.join(sel)} FROM disposal_cases "
+                f"WHERE status IN ({qmarks}) "
+                "ORDER BY created_at DESC, disposal_id DESC LIMIT ?;"
+            )
+            rows = conn.execute(sql, tuple(statuses) + (int(lim),)).fetchall()
+
+        for r in rows:
+            rr = dict(r)
+            uid = str(rr.get("asset_uid") or "").strip()
+            if not uid:
+                continue
+            try:
+                a = get_asset_by_uid(asset_uid=uid)
+                if not a:
+                    continue
+            except PermissionError:
+                continue
+            except Exception:
+                continue
+
+            merged = dict(a)
+            merged["disposal_case"] = rr
+            merged["disposal_id"] = rr.get("disposal_id")
+            merged["disposal_status"] = rr.get("status")
+            merged["disposal_reason"] = rr.get("reason", "")
+            merged["disposal_notes"] = rr.get("notes", "")
+            merged["disposal_created_at"] = rr.get("created_at", "")
+            merged["disposal_prepared_by"] = rr.get("prepared_by", "")
+            merged["disposal_approved_by"] = rr.get("approved_by", "")
+            merged["disposal_approved_at"] = rr.get("approved_at", "")
+            out.append(merged)
+
+    except Exception:
+        return out
+
+    return out
+
+
 def prepare_disposal(
     *,
     asset_uid: str,
@@ -1724,8 +1878,11 @@ def prepare_disposal(
     _require_login("assets.prepare_disposal")
     _require_perm(PERM_DISPOSAL_PREPARE, "assets.prepare_disposal")
 
-    # enforce access to asset (RBAC + security scope)
-    _ = get_asset_by_uid(asset_uid=asset_uid)
+    uid = (asset_uid or "").strip()
+    if not uid:
+        raise ValueError("asset_uid je obavezan.")
+
+    _assert_asset_visible_or_raise(uid, "assets.prepare_disposal")
 
     if _db_prepare_disposal is None:
         raise RuntimeError("DB funkcija prepare_disposal_db nije dostupna (core.db).")
@@ -1733,7 +1890,7 @@ def prepare_disposal(
     return int(_call_compatible(
         _db_prepare_disposal,
         actor=_actor_name_for_audit(),
-        asset_uid=(asset_uid or "").strip(),
+        asset_uid=uid,
         reason=(reason or "").strip(),
         notes=(notes or "").strip(),
         data_obj=(data or None),
@@ -1749,16 +1906,20 @@ def approve_disposal(
     _require_login("assets.approve_disposal")
     _require_perm(PERM_DISPOSAL_APPROVE, "assets.approve_disposal")
 
+    did = int(disposal_id or 0)
+    if did <= 0:
+        raise ValueError("disposal_id mora biti > 0")
+
     if _db_approve_disposal is None:
         raise RuntimeError("DB funkcija approve_disposal_db nije dostupna (core.db).")
 
-    uid = _disposal_case_asset_uid(int(disposal_id))
-    _ = get_asset_by_uid(asset_uid=uid)
+    uid = _disposal_case_asset_uid(did)
+    _assert_asset_visible_or_raise(uid, "assets.approve_disposal")
 
     _call_compatible(
         _db_approve_disposal,
         actor=_actor_name_for_audit(),
-        disposal_id=int(disposal_id),
+        disposal_id=did,
         source=(source or "").strip(),
     )
 
@@ -1772,16 +1933,20 @@ def cancel_disposal(
     _require_login("assets.cancel_disposal")
     _require_perm(PERM_DISPOSAL_PREPARE, "assets.cancel_disposal")
 
+    did = int(disposal_id or 0)
+    if did <= 0:
+        raise ValueError("disposal_id mora biti > 0")
+
     if _db_cancel_disposal is None:
         raise RuntimeError("DB funkcija cancel_disposal_db nije dostupna (core.db).")
 
-    uid = _disposal_case_asset_uid(int(disposal_id))
-    _ = get_asset_by_uid(asset_uid=uid)
+    uid = _disposal_case_asset_uid(did)
+    _assert_asset_visible_or_raise(uid, "assets.cancel_disposal")
 
     _call_compatible(
         _db_cancel_disposal,
         actor=_actor_name_for_audit(),
-        disposal_id=int(disposal_id),
+        disposal_id=did,
         reason=(reason or "").strip(),
         source=(source or "").strip(),
     )
@@ -1796,18 +1961,41 @@ def dispose_from_case(
     _require_login("assets.dispose_from_case")
     _require_perm(PERM_DISPOSAL_DISPOSE, "assets.dispose_from_case")
 
+    did = int(disposal_id or 0)
+    if did <= 0:
+        raise ValueError("disposal_id mora biti > 0")
+
     if _db_dispose_from_case is None:
         raise RuntimeError("DB funkcija dispose_from_case_db nije dostupna (core.db).")
 
-    uid = _disposal_case_asset_uid(int(disposal_id))
-    _ = get_asset_by_uid(asset_uid=uid)
+    uid = _disposal_case_asset_uid(did)
+    _assert_asset_visible_or_raise(uid, "assets.dispose_from_case")
 
     _call_compatible(
         _db_dispose_from_case,
         actor=_actor_name_for_audit(),
-        disposal_id=int(disposal_id),
+        disposal_id=did,
         disposed_doc_no=(disposed_doc_no or "").strip(),
         source=(source or "").strip(),
     )
 
+
+__all__ = [
+    "create_asset",
+    "list_assets",
+    "list_assets_brief",
+    "get_asset_by_uid",
+    "list_assets_my",
+    "list_assets_my_brief",
+    "missing_fields_for_asset",
+    # disposal
+    "prepare_disposal",
+    "approve_disposal",
+    "cancel_disposal",
+    "dispose_from_case",
+    "get_open_disposal_case_for_asset",
+    "list_disposal_queue",
+]
+
 # (FILENAME: services/assets_service.py - END PART 2/2)
+# END FILENAME: services/assets_service.py

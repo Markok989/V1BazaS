@@ -1,21 +1,11 @@
-[2026-02-25 23:56:57] FATAL ERROR (main)
+[2026-02-26 01:51:19] UNHANDLED EXCEPTION (sys.excepthook)
 APP=BazaS2 v=0.2-v1
-PID=24876 THREAD=MainThread
+PID=5016 THREAD=MainThread
 DB_FILE=D:\DEV\AppToc\V1Baza\data\db\bazas2.sqlite
 
 EXCEPTION:
 Traceback (most recent call last):
-  File "D:\DEV\AppToc\V1Baza\app.py", line 1457, in main
-    start_ui(logger)
-    ~~~~~~~~^^^^^^^^
-  File "D:\DEV\AppToc\V1Baza\app.py", line 1368, in start_ui
-    win = MainWindow(logger)
-  File "D:\DEV\AppToc\V1Baza\app.py", line 965, in __init__
-    self._rebuild_ui_by_profile()
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
-  File "D:\DEV\AppToc\V1Baza\app.py", line 1190, in _rebuild_ui_by_profile
-    page_assets = AssetsPage(self.logger)
-  File "D:\DEV\AppToc\V1Baza\ui\assets_page.py", line 855, in __init__
-    self._reload_timer.timeout.connect(self._on_reload_timeout)
-                                       ^^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: 'AssetsPage' object has no attribute '_on_reload_timeout'
+  File "D:\DEV\AppToc\V1Baza\app.py", line 786, in eventFilter
+    def eventFilter(self, obj, ev):  # type: ignore[override]
+    
+KeyboardInterrupt

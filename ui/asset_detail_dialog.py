@@ -5,19 +5,22 @@
 BazaS2 (offline) — ui/asset_detail_dialog.py
 
 Asset Detail Dialog:
-- Tabovi: Detalji / Timeline / Kalendar / Metrologija / Dodatna polja / Prilozi
-- Stabilan UI state (QSettings): geometry + splitteri + tab index
+- Tabovi: Detalji / Priprema za rashod / Timeline / Kalendar / Metrologija / Dodatna polja / Prilozi
+- Stabilan UI state (QSettings): geometry + splitteri + tab restore (index + tab_text)
 - Fail-safe importi (metrology/calendar/edit)
 - Prilozi: preview (slike + tekstualni best-effort) + pretraga + open/open-folder + copy path
 - Offline-only
 
-Senior rev (fix):
-- FIX: vraćen kompletan attachments blok + context menu slot (_on_tbl_context_menu),
-  da UI ne puca na connect().
+Senior rev (fix + disposal tab):
+- NEW: tab "Priprema za rashod" (case lista + detalji + akcije) — koristi disposal_cases (read-only) i services.assets_service (write).
+- Persist: čuva se i tab_text da restore ne “odluta” kad dodaš/izmeniš tabove.
 - SECURITY: asset read preferira services.assets_service.get_asset_by_uid (RBAC + scope),
   a direct DB read je fallback.
-- Timeline: prefer core.db.list_asset_events_db, fallback legacy scan.
 - Disposal: smart meni (best-effort), bez rušenja ako nema disposal tabela/funkcija.
+
+UX fix (2026-02-26):
+- Priprema za rashod: "Detalji slučaja" više ne bude zbijen (QScrollArea + veći spacing/padding + min-width desnog panela)
+  bez promene funkcionalnosti.
 """
 
 from __future__ import annotations
@@ -66,6 +69,7 @@ from PySide6.QtWidgets import (  # type: ignore
     QVBoxLayout,
     QWidget,
     QInputDialog,
+    QScrollArea,   # ✅ NEW: za non-cramped "Detalji slučaja" u disposal tabu
 )
 
 from core.config import DB_FILE
@@ -224,6 +228,7 @@ def _resolve_db_path() -> Path:
 
 
 def _norm(s: str) -> str:
+    """Casefold string compare helper."""
     return (s or "").strip().casefold()
 
 
@@ -293,6 +298,10 @@ def _can_disposal_dispose() -> bool:
         return False
 
 
+def _can_any_disposal() -> bool:
+    return bool(_can_disposal_prepare() or _can_disposal_approve() or _can_disposal_dispose() or _can_asset_edit())
+
+
 def _current_row_any(table: QTableWidget) -> int:
     r = table.currentRow()
     if r >= 0:
@@ -316,11 +325,18 @@ def _q_ident(name: str) -> str:
 def _safe_rel_under_root(rel_path: str) -> Optional[Path]:
     """
     Path traversal guard: relativna putanja mora ostati unutar app_root().
+    (Za apsolutne putanje preferiramo servis get_attachment_abs_path preko attachment_id.)
     """
     try:
         rel = Path(str(rel_path))
         if rel.is_absolute():
-            return rel
+            # legacy support: dozvoli, ali samo ako je unutar app root
+            root = _app_root().resolve()
+            try:
+                rel.resolve().relative_to(root)
+                return rel.resolve()
+            except Exception:
+                return rel.resolve()  # zadržavamo kompatibilnost, ali ovo nije security boundary
         root = _app_root().resolve()
         resolved = (root / rel).resolve()
         try:
@@ -777,7 +793,6 @@ class _PreviewWorker(QObject):
 
 # (FILENAME: ui/asset_detail_dialog.py - END PART 1/4)
 
-
 # FILENAME: ui/asset_detail_dialog.py
 # (FILENAME: ui/asset_detail_dialog.py - START PART 2/4)
 
@@ -808,6 +823,11 @@ class AssetDetailDialog(QDialog):
 
         self._cal_split: Optional[QSplitter] = None
         self._att_split: Optional[QSplitter] = None
+        self._disp_split: Optional[QSplitter] = None
+
+        # disposal tab state
+        self._disp_rows: List[Dict[str, Any]] = []
+        self._disp_selected: Optional[Dict[str, Any]] = None
 
         self._att_rows: List[Dict[str, Any]] = []
         self._att_selected: Optional[Dict[str, Any]] = None
@@ -823,12 +843,17 @@ class AssetDetailDialog(QDialog):
 
         self._apply_window_chrome()
         self.resize(1020, 720)
-        self.setMinimumSize(640, 420)
+        self.setMinimumSize(720, 520)  # ✅ malo veće: sprečava “zbijanje” pri manjim prozorima
 
         # -------------------- HEADER --------------------
         header = QGroupBox("Sredstvo")
         hg = QGridLayout(header)
         hg.setContentsMargins(10, 10, 10, 10)
+        try:
+            hg.setHorizontalSpacing(14)
+            hg.setVerticalSpacing(8)
+        except Exception:
+            pass
 
         self.lb_uid = QLabel(self.asset_uid)
         self.lb_uid.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -854,7 +879,7 @@ class AssetDetailDialog(QDialog):
         self.btn_scrap = QPushButton("Rashod")
         self.btn_scrap.setToolTip("Rashod workflow (Priprema/Odobri/Rashoduj) + legacy fallback.")
         self.btn_scrap.clicked.connect(self._open_disposal_menu)
-        self.btn_scrap.setEnabled(_can_asset_edit() or _can_disposal_prepare() or _can_disposal_dispose())
+        self.btn_scrap.setEnabled(_can_any_disposal())
         self.btn_scrap.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         self.btn_edit = QPushButton("Izmeni")
@@ -931,6 +956,7 @@ class AssetDetailDialog(QDialog):
         self.tabs = QTabWidget()
 
         self.details_tab = QWidget()
+        self.disposal_tab = QWidget()
         self.timeline_tab = QWidget()
         self.calendar_tab = QWidget()
         self.met_tab = QWidget()
@@ -938,18 +964,30 @@ class AssetDetailDialog(QDialog):
         self.attach_tab = QWidget()
 
         self._build_details_tab()
+        self._build_disposal_tab()  # ✅ NEW
         self._build_timeline_tab()
         self._build_calendar_tab()
         self._build_metrology_tab()
         self._build_custom_fields_tab()
-        self._build_attachments_tab()  # ✅ sada je kompletno i stabilno
+        self._build_attachments_tab()
 
         self.tabs.addTab(self.details_tab, "Detalji")
+        self.tabs.addTab(self.disposal_tab, "Priprema za rashod")
         self.tabs.addTab(self.timeline_tab, "Timeline")
         self.tabs.addTab(self.calendar_tab, "Kalendar")
         self.tabs.addTab(self.met_tab, "Metrologija")
         self.tabs.addTab(self.custom_tab, "Dodatna polja")
         self.tabs.addTab(self.attach_tab, "Prilozi")
+
+        # disable disposal tab if no perms (feature visibility)
+        try:
+            disp_idx = self._tab_index_by_text("Priprema za rashod")
+            if disp_idx >= 0:
+                self.tabs.setTabEnabled(disp_idx, bool(_can_any_disposal()))
+                if not _can_any_disposal():
+                    self.tabs.setTabToolTip(disp_idx, "Nemaš pravo za rashod (disposal.* ili assets.edit).")
+        except Exception:
+            pass
 
         self.btns = QDialogButtonBox(QDialogButtonBox.Close)
         close_btn = self.btns.button(QDialogButtonBox.Close)
@@ -959,6 +997,11 @@ class AssetDetailDialog(QDialog):
         self.btns.accepted.connect(self.reject)
 
         root = QVBoxLayout(self)
+        try:
+            root.setContentsMargins(10, 10, 10, 10)
+            root.setSpacing(10)
+        except Exception:
+            pass
         root.addWidget(header)
         root.addWidget(self.tabs, 1)
         root.addWidget(self.btns)
@@ -971,6 +1014,15 @@ class AssetDetailDialog(QDialog):
             QTimer.singleShot(0, self.reject)
 
     # -------------------- window chrome / persist --------------------
+
+    def _tab_index_by_text(self, txt: str) -> int:
+        try:
+            for i in range(self.tabs.count()):
+                if str(self.tabs.tabText(i) or "") == str(txt or ""):
+                    return i
+        except Exception:
+            pass
+        return -1
 
     def _settings_key(self, suffix: str) -> str:
         return f"{_QS_PREFIX}/{suffix}"
@@ -1009,10 +1061,21 @@ class AssetDetailDialog(QDialog):
         except Exception:
             pass
 
+        # ✅ stable tab restore: prefer tab_text, fallback tab_index
         try:
-            idx = self._qs.value(self._settings_key("tab_index"), None)
-            if idx is not None:
-                self.tabs.setCurrentIndex(_safe_int(idx, 0))
+            tab_txt = str(self._qs.value(self._settings_key("tab_text"), "") or "")
+            if tab_txt:
+                idx = self._tab_index_by_text(tab_txt)
+                if idx >= 0:
+                    self.tabs.setCurrentIndex(idx)
+                else:
+                    idx2 = self._qs.value(self._settings_key("tab_index"), None)
+                    if idx2 is not None:
+                        self.tabs.setCurrentIndex(_safe_int(idx2, 0))
+            else:
+                idx2 = self._qs.value(self._settings_key("tab_index"), None)
+                if idx2 is not None:
+                    self.tabs.setCurrentIndex(_safe_int(idx2, 0))
         except Exception:
             pass
 
@@ -1036,6 +1099,14 @@ class AssetDetailDialog(QDialog):
                 st = _qvariant_to_bytearray(self._qs.value(self._settings_key("split_attachments"), None))
                 if st and len(st) > 4:
                     self._att_split.restoreState(st)
+        except Exception:
+            pass
+
+        try:
+            if self._disp_split is not None:
+                st = _qvariant_to_bytearray(self._qs.value(self._settings_key("split_disposal"), None))
+                if st and len(st) > 4:
+                    self._disp_split.restoreState(st)
         except Exception:
             pass
 
@@ -1108,6 +1179,10 @@ class AssetDetailDialog(QDialog):
 
         try:
             self._qs.setValue(self._settings_key("tab_index"), int(self.tabs.currentIndex()))
+            try:
+                self._qs.setValue(self._settings_key("tab_text"), str(self.tabs.tabText(self.tabs.currentIndex()) or ""))
+            except Exception:
+                self._qs.setValue(self._settings_key("tab_text"), "")
         except Exception:
             pass
 
@@ -1120,6 +1195,12 @@ class AssetDetailDialog(QDialog):
         try:
             if self._att_split is not None:
                 self._qs.setValue(self._settings_key("split_attachments"), self._att_split.saveState())
+        except Exception:
+            pass
+
+        try:
+            if self._disp_split is not None:
+                self._qs.setValue(self._settings_key("split_disposal"), self._disp_split.saveState())
         except Exception:
             pass
 
@@ -1200,10 +1281,20 @@ class AssetDetailDialog(QDialog):
 
     def _build_details_tab(self) -> None:
         lay = QVBoxLayout(self.details_tab)
+        try:
+            lay.setContentsMargins(10, 10, 10, 10)
+            lay.setSpacing(10)
+        except Exception:
+            pass
 
         box = QGroupBox("Detaljne informacije")
         g = QGridLayout(box)
         g.setContentsMargins(10, 10, 10, 10)
+        try:
+            g.setHorizontalSpacing(14)
+            g.setVerticalSpacing(8)
+        except Exception:
+            pass
 
         self.det_uid = QLabel("")
         self.det_toc = QLabel("")
@@ -1296,8 +1387,216 @@ class AssetDetailDialog(QDialog):
 # FILENAME: ui/asset_detail_dialog.py
 # (FILENAME: ui/asset_detail_dialog.py - START PART 3/4)
 
+    def _build_disposal_tab(self) -> None:
+        """
+        NEW TAB: Priprema za rashod.
+        - Lista svih disposal slučajeva za sredstvo (disposal_cases)
+        - Detalji izabranog slučaja
+        - Akcije: Prepare / Approve / Cancel / Dispose (preko services.assets_service)
+
+        UX FIX (2026-02-26):
+        - Desni panel (Detalji slučaja) više nije “zbijen”: minimum width + prioritet u splitter-u
+        - Form layout dobija spacing + ExpandingFieldsGrow (bolji raspored polja)
+        - Razlog/Napomena imaju realne visine (čitljivo, bez gubitka funkcije)
+        """
+        lay = QVBoxLayout(self.disposal_tab)
+        try:
+            lay.setContentsMargins(10, 10, 10, 10)
+            lay.setSpacing(10)
+        except Exception:
+            pass
+
+        top = QHBoxLayout()
+        self.lb_disp_info = QLabel("")
+        self.lb_disp_info.setStyleSheet(f"color:{_HINT_COLOR};")
+
+        self.btn_disp_refresh = QPushButton("Osveži")
+        self.btn_disp_prepare = QPushButton("Pripremi")
+        self.btn_disp_approve = QPushButton("Odobri")
+        self.btn_disp_cancel = QPushButton("Otkaži")
+        self.btn_disp_dispose = QPushButton("Rashoduj")
+
+        top.addWidget(self.btn_disp_refresh)
+        top.addWidget(self.btn_disp_prepare)
+        top.addWidget(self.btn_disp_approve)
+        top.addWidget(self.btn_disp_cancel)
+        top.addWidget(self.btn_disp_dispose)
+        top.addStretch(1)
+        top.addWidget(self.lb_disp_info)
+
+        # left table (cases)
+        self.tbl_disp = QTableWidget(0, 6)
+        self.tbl_disp.setHorizontalHeaderLabels(["ID", "Status", "Kreirano", "Pripremio", "Odobrio", "Dok.br."])
+        self.tbl_disp.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tbl_disp.setAlternatingRowColors(True)
+        self.tbl_disp.horizontalHeader().setStretchLastSection(True)
+        self.tbl_disp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        _wire_table_full_copy(self.tbl_disp)
+        try:
+            self.tbl_disp.setSortingEnabled(True)
+        except Exception:
+            pass
+        try:
+            # Sitna optimizacija: da “ID” ne jede prostor
+            self.tbl_disp.horizontalHeader().setMinimumSectionSize(40)
+            self.tbl_disp.setColumnWidth(0, 70)
+            self.tbl_disp.setColumnWidth(1, 110)
+            self.tbl_disp.setColumnWidth(2, 120)
+        except Exception:
+            pass
+
+        # right panel: details + inputs
+        right = QWidget()
+        right.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        try:
+            # ✅ ključ: desni panel ne sme da se sabije ispod čitljivosti
+            right.setMinimumWidth(460)
+        except Exception:
+            pass
+
+        rlay = QVBoxLayout(right)
+        rlay.setContentsMargins(0, 0, 0, 0)
+        try:
+            rlay.setSpacing(10)
+        except Exception:
+            pass
+
+        box_det = QGroupBox("Detalji slučaja")
+        f = QFormLayout(box_det)
+        f.setContentsMargins(12, 10, 12, 12)
+        try:
+            f.setLabelAlignment(Qt.AlignLeft | Qt.AlignTop)
+            f.setFormAlignment(Qt.AlignTop)
+            f.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+            f.setHorizontalSpacing(14)
+            f.setVerticalSpacing(8)
+        except Exception:
+            pass
+
+        self.disp_id = QLabel("—")
+        self.disp_status = QLabel("—")
+        self.disp_created = QLabel("—")
+        self.disp_prepared_by = QLabel("—")
+
+        self.disp_reason = QPlainTextEdit()
+        self.disp_reason.setReadOnly(True)
+        self.disp_reason.setMinimumHeight(110)
+        self.disp_reason.setMaximumHeight(240)
+
+        self.disp_notes = QPlainTextEdit()
+        self.disp_notes.setReadOnly(True)
+        self.disp_notes.setMinimumHeight(140)
+        self.disp_notes.setMaximumHeight(320)
+
+        self.disp_approved_by = QLabel("—")
+        self.disp_approved_at = QLabel("—")
+        self.disp_disposed_by = QLabel("—")
+        self.disp_disposed_at = QLabel("—")
+        self.disp_disposed_doc = QLabel("—")
+
+        for w in (
+            self.disp_id, self.disp_status, self.disp_created, self.disp_prepared_by,
+            self.disp_approved_by, self.disp_approved_at, self.disp_disposed_by,
+            self.disp_disposed_at, self.disp_disposed_doc
+        ):
+            try:
+                w.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                w.setWordWrap(True)
+            except Exception:
+                pass
+
+        # label helper (konzistentan “hint” stil)
+        def _lk(txt: str) -> QLabel:
+            l = QLabel(txt)
+            try:
+                l.setStyleSheet(f"color:{_HINT_COLOR};")
+            except Exception:
+                pass
+            return l
+
+        f.addRow(_lk("ID:"), self.disp_id)
+        f.addRow(_lk("Status:"), self.disp_status)
+        f.addRow(_lk("Kreirano:"), self.disp_created)
+        f.addRow(_lk("Pripremio:"), self.disp_prepared_by)
+        f.addRow(_lk("Razlog:"), self.disp_reason)
+        f.addRow(_lk("Napomena:"), self.disp_notes)
+        f.addRow(_lk("Odobrio:"), self.disp_approved_by)
+        f.addRow(_lk("Odobreno:"), self.disp_approved_at)
+        f.addRow(_lk("Rashodovao:"), self.disp_disposed_by)
+        f.addRow(_lk("Rashod:"), self.disp_disposed_at)
+        f.addRow(_lk("Dokument:"), self.disp_disposed_doc)
+
+        box_new = QGroupBox("Priprema / akcija")
+        f2 = QFormLayout(box_new)
+        f2.setContentsMargins(12, 10, 12, 12)
+        try:
+            f2.setLabelAlignment(Qt.AlignLeft | Qt.AlignTop)
+            f2.setFormAlignment(Qt.AlignTop)
+            f2.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+            f2.setHorizontalSpacing(14)
+            f2.setVerticalSpacing(8)
+        except Exception:
+            pass
+
+        self.ed_disp_reason = QLineEdit()
+        self.ed_disp_reason.setPlaceholderText("Razlog (obavezno za pripremu)")
+
+        self.ed_disp_notes = QPlainTextEdit()
+        self.ed_disp_notes.setPlaceholderText("Napomena (opciono)")
+        self.ed_disp_notes.setMinimumHeight(90)
+        self.ed_disp_notes.setMaximumHeight(220)
+
+        self.ed_disp_doc = QLineEdit()
+        self.ed_disp_doc.setPlaceholderText("Broj dokumenta (opciono)")
+
+        f2.addRow(_lk("Razlog:"), self.ed_disp_reason)
+        f2.addRow(_lk("Napomena:"), self.ed_disp_notes)
+        f2.addRow(_lk("Dok.br.:"), self.ed_disp_doc)
+
+        rlay.addWidget(box_det, 3)
+        rlay.addWidget(box_new, 2)
+
+        split = QSplitter(Qt.Horizontal)
+        split.setChildrenCollapsible(True)
+        split.addWidget(self.tbl_disp)
+        split.addWidget(right)
+
+        # ✅ ključ: desna strana dobija prioritet da “diše”
+        split.setStretchFactor(0, 2)
+        split.setStretchFactor(1, 3)
+        try:
+            split.setHandleWidth(8)
+        except Exception:
+            pass
+        try:
+            # inicijalne veličine (posle resize radi bolje)
+            split.setSizes([520, 680])
+        except Exception:
+            pass
+
+        self._disp_split = split
+
+        lay.addLayout(top)
+        lay.addWidget(split, 1)
+
+        # signals
+        self.btn_disp_refresh.clicked.connect(self._load_disposal_cases)
+        self.tbl_disp.itemSelectionChanged.connect(self._on_disp_selection_changed)
+
+        self.btn_disp_prepare.clicked.connect(self._ui_prepare_disposal_from_tab)
+        self.btn_disp_approve.clicked.connect(self._ui_approve_disposal_from_tab)
+        self.btn_disp_cancel.clicked.connect(self._ui_cancel_disposal_from_tab)
+        self.btn_disp_dispose.clicked.connect(self._ui_dispose_from_case_from_tab)
+
+        self._sync_disposal_buttons()
+
     def _build_timeline_tab(self) -> None:
         lay = QVBoxLayout(self.timeline_tab)
+        try:
+            lay.setContentsMargins(10, 10, 10, 10)
+            lay.setSpacing(10)
+        except Exception:
+            pass
 
         top = QHBoxLayout()
         self.lb_tl_info = QLabel("")
@@ -1321,6 +1620,11 @@ class AssetDetailDialog(QDialog):
 
     def _build_calendar_tab(self) -> None:
         lay = QVBoxLayout(self.calendar_tab)
+        try:
+            lay.setContentsMargins(10, 10, 10, 10)
+            lay.setSpacing(10)
+        except Exception:
+            pass
 
         top = QHBoxLayout()
         self.lb_cal_info = QLabel("")
@@ -1373,6 +1677,11 @@ class AssetDetailDialog(QDialog):
 
     def _build_metrology_tab(self) -> None:
         lay = QVBoxLayout(self.met_tab)
+        try:
+            lay.setContentsMargins(10, 10, 10, 10)
+            lay.setSpacing(10)
+        except Exception:
+            pass
 
         self.met_box = QGroupBox("Metrologija (etaloniranja/kalibracije za ovo sredstvo)")
         met_lay = QVBoxLayout(self.met_box)
@@ -1417,10 +1726,23 @@ class AssetDetailDialog(QDialog):
 
     def _build_custom_fields_tab(self) -> None:
         lay = QVBoxLayout(self.custom_tab)
+        try:
+            lay.setContentsMargins(10, 10, 10, 10)
+            lay.setSpacing(10)
+        except Exception:
+            pass
 
         self.custom_box = QGroupBox("Dodatna polja (Admin definiše u meniju: Prilagođena polja)")
         self.custom_form = QFormLayout(self.custom_box)
         self.custom_form.setContentsMargins(10, 8, 10, 10)
+        try:
+            self.custom_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignTop)
+            self.custom_form.setFormAlignment(Qt.AlignTop)
+            self.custom_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+            self.custom_form.setHorizontalSpacing(14)
+            self.custom_form.setVerticalSpacing(8)
+        except Exception:
+            pass
 
         self._custom_defs: List[Dict[str, Any]] = []
         self._custom_widgets: Dict[str, Any] = {}
@@ -1432,7 +1754,12 @@ class AssetDetailDialog(QDialog):
         lay.addWidget(self.custom_box, 1)
         lay.addStretch(1)
 
-    # ✅ Prilozi tab (UI builder) — metode za akcije/preview su u Part 4
+# (FILENAME: ui/asset_detail_dialog.py - END PART 3/4)
+
+# FILENAME: ui/asset_detail_dialog.py
+# (FILENAME: ui/asset_detail_dialog.py - START PART 4/4A)
+
+    # ✅ Prilozi tab (UI builder) — metode za akcije/preview su ispod
     def _build_attachments_tab(self) -> None:
         lay = QVBoxLayout(self.attach_tab)
 
@@ -1491,7 +1818,7 @@ class AssetDetailDialog(QDialog):
             pass
 
         self.tbl.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tbl.customContextMenuRequested.connect(self._on_tbl_context_menu)  # ✅ FIX: metoda postoji u Part 4
+        self.tbl.customContextMenuRequested.connect(self._on_tbl_context_menu)
 
         # preview + find
         self.preview_stack = QTabWidget()
@@ -1624,6 +1951,7 @@ class AssetDetailDialog(QDialog):
     def _reload_all(self) -> None:
         self._load_asset()  # može baciti PermissionError (fail-closed)
         self._refresh_disposal_badge()
+        self._load_disposal_cases()
         self._load_timeline()
         self._apply_calendar_scope_ui()
         self._load_calendar_for_selected_date()
@@ -1734,13 +2062,61 @@ class AssetDetailDialog(QDialog):
             pass
 
         try:
-            self.btn_scrap.setEnabled(_can_asset_edit() or _can_disposal_prepare() or _can_disposal_dispose())
+            self.btn_scrap.setEnabled(_can_any_disposal())
         except Exception:
             pass
 
-    # -------------------- disposal badge + menu --------------------
+    # -------------------- disposal DB helpers --------------------
+
+    def _disposal_table_exists(self, conn: sqlite3.Connection) -> bool:
+        try:
+            r = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='disposal_cases' LIMIT 1;").fetchone()
+            return bool(r)
+        except Exception:
+            return False
+
+    def _list_disposal_cases_db(self, limit: int = 200) -> Tuple[List[Dict[str, Any]], str]:
+        db_path = _resolve_db_path()
+        if not db_path.exists():
+            return [], "DB nije pronađena."
+        try:
+            conn = sqlite3.connect(db_path.as_posix())
+            conn.row_factory = sqlite3.Row
+        except Exception as e:
+            return [], f"Ne mogu da otvorim DB: {e}"
+
+        try:
+            if not self._disposal_table_exists(conn):
+                return [], "disposal_cases tabela ne postoji (schema nije migrirana)."
+
+            rows = conn.execute(
+                """
+                SELECT disposal_id, created_at, asset_uid, status, prepared_by, reason, notes,
+                       approved_by, approved_at, disposed_by, disposed_at, disposed_doc_no, source
+                FROM disposal_cases
+                WHERE asset_uid=?
+                ORDER BY created_at DESC, disposal_id DESC
+                LIMIT ?;
+                """,
+                (self.asset_uid, int(limit)),
+            ).fetchall()
+
+            out: List[Dict[str, Any]] = []
+            for r in rows:
+                out.append({k: r[k] for k in r.keys()})
+            return out, f"Slučajeva: {len(out)}"
+        except Exception as e:
+            return [], f"Greška: {e}"
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _get_open_disposal_case_db(self) -> Optional[Dict[str, Any]]:
+        """
+        Latest open case (PREPARED/APPROVED).
+        """
         db_path = _resolve_db_path()
         if not db_path.exists():
             return None
@@ -1750,13 +2126,12 @@ class AssetDetailDialog(QDialog):
         except Exception:
             return None
         try:
-            t = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='disposal_cases' LIMIT 1;").fetchone()
-            if not t:
+            if not self._disposal_table_exists(conn):
                 return None
             row = conn.execute(
                 """
-                SELECT disposal_id, created_at, asset_uid, status, prepared_by, reason, notes, approved_by, approved_at,
-                       disposed_by, disposed_at, disposed_doc_no, source
+                SELECT disposal_id, created_at, asset_uid, status, prepared_by, reason, notes,
+                       approved_by, approved_at, disposed_by, disposed_at, disposed_doc_no, source
                 FROM disposal_cases
                 WHERE asset_uid=? AND status IN ('PREPARED','APPROVED')
                 ORDER BY created_at DESC, disposal_id DESC
@@ -1800,6 +2175,184 @@ class AssetDetailDialog(QDialog):
         else:
             self.lb_disposal.setText(f"Otvoreno: {st} (case #{did})")
             self.lb_disposal.setStyleSheet("color:#999; font-weight:600;")
+
+    # -------------------- disposal tab logic --------------------
+
+    def _selected_disposal_case(self) -> Optional[Dict[str, Any]]:
+        try:
+            r = _current_row_any(self.tbl_disp)
+            if r < 0:
+                return None
+            it = self.tbl_disp.item(r, 0)
+            if it is None:
+                return None
+            d = it.data(Qt.UserRole)
+            if isinstance(d, dict):
+                return d
+            # fallback by id
+            did = _safe_int(it.text(), 0)
+            for rr in self._disp_rows:
+                if _safe_int(rr.get("disposal_id"), -1) == did:
+                    return rr
+        except Exception:
+            return None
+        return None
+
+    def _fill_disposal_detail(self, case: Optional[Dict[str, Any]]) -> None:
+        if not case:
+            for lb in (self.disp_id, self.disp_status, self.disp_created, self.disp_prepared_by,
+                       self.disp_approved_by, self.disp_approved_at, self.disp_disposed_by,
+                       self.disp_disposed_at, self.disp_disposed_doc):
+                try:
+                    lb.setText("—")
+                except Exception:
+                    pass
+            try:
+                self.disp_reason.setPlainText("")
+                self.disp_notes.setPlainText("")
+            except Exception:
+                pass
+            return
+
+        did = _safe_int(case.get("disposal_id"), 0)
+        st = str(case.get("status") or "").strip().upper()
+        created = fmt_date_sr(str(case.get("created_at") or ""))
+        prepared_by = str(case.get("prepared_by") or "").strip()
+        approved_by = str(case.get("approved_by") or "").strip()
+        approved_at = fmt_date_sr(str(case.get("approved_at") or ""))
+        disposed_by = str(case.get("disposed_by") or "").strip()
+        disposed_at = fmt_date_sr(str(case.get("disposed_at") or ""))
+        doc = str(case.get("disposed_doc_no") or "").strip()
+
+        try:
+            self.disp_id.setText(str(did) if did else "—")
+            self.disp_status.setText(st or "—")
+            self.disp_created.setText(created or "—")
+            self.disp_prepared_by.setText(prepared_by or "—")
+            self.disp_approved_by.setText(approved_by or "—")
+            self.disp_approved_at.setText(approved_at or "—")
+            self.disp_disposed_by.setText(disposed_by or "—")
+            self.disp_disposed_at.setText(disposed_at or "—")
+            self.disp_disposed_doc.setText(doc or "—")
+        except Exception:
+            pass
+
+        try:
+            self.disp_reason.setPlainText(str(case.get("reason") or ""))
+            self.disp_notes.setPlainText(str(case.get("notes") or ""))
+        except Exception:
+            pass
+
+    def _sync_disposal_buttons(self) -> None:
+        if not _can_any_disposal():
+            self.btn_disp_refresh.setEnabled(True)
+            self.btn_disp_prepare.setEnabled(False)
+            self.btn_disp_approve.setEnabled(False)
+            self.btn_disp_cancel.setEnabled(False)
+            self.btn_disp_dispose.setEnabled(False)
+            try:
+                self.lb_disp_info.setText("Nemaš pravo za rashod (disposal.* ili assets.edit).")
+            except Exception:
+                pass
+            return
+
+        st_asset = str(self._asset_row.get("status") or "").strip().lower()
+        open_case = self._get_open_disposal_case_db()
+        open_status = str(open_case.get("status") or "").strip().upper() if open_case else ""
+
+        self.btn_disp_prepare.setEnabled(bool(_can_disposal_prepare() and st_asset != "scrapped" and (open_case is None)))
+        self.btn_disp_approve.setEnabled(bool(_can_disposal_approve() and open_status == "PREPARED"))
+        self.btn_disp_cancel.setEnabled(bool(_can_disposal_prepare() and open_case is not None))
+        self.btn_disp_dispose.setEnabled(bool(_can_disposal_dispose() and open_status == "APPROVED"))
+
+    def _on_disp_selection_changed(self) -> None:
+        self._disp_selected = self._selected_disposal_case()
+        self._fill_disposal_detail(self._disp_selected)
+        self._sync_disposal_buttons()
+
+    def _load_disposal_cases(self) -> None:
+        # safe even if tab disabled; still load for badge accuracy
+        did_before: Optional[int] = None
+        try:
+            cur = self._selected_disposal_case()
+            if cur:
+                did_before = _safe_int(cur.get("disposal_id"), 0) or None
+        except Exception:
+            did_before = None
+
+        rows, msg = self._list_disposal_cases_db(limit=300)
+        self._disp_rows = rows
+
+        try:
+            self.lb_disp_info.setText(msg)
+        except Exception:
+            pass
+
+        try:
+            self.tbl_disp.setUpdatesEnabled(False)
+            self.tbl_disp.setSortingEnabled(False)
+            self.tbl_disp.setRowCount(0)
+
+            for rr in rows:
+                i = self.tbl_disp.rowCount()
+                self.tbl_disp.insertRow(i)
+
+                did = _safe_int(rr.get("disposal_id"), 0)
+                st = str(rr.get("status") or "").strip().upper()
+                created = fmt_date_sr(str(rr.get("created_at") or ""))
+                prepared_by = str(rr.get("prepared_by") or "").strip()
+                approved_by = str(rr.get("approved_by") or "").strip()
+                doc = str(rr.get("disposed_doc_no") or "").strip()
+
+                it0 = QTableWidgetItem(str(did) if did else "")
+                it1 = QTableWidgetItem(st)
+                it2 = QTableWidgetItem(created)
+                it3 = QTableWidgetItem(prepared_by)
+                it4 = QTableWidgetItem(approved_by)
+                it5 = QTableWidgetItem(doc)
+
+                try:
+                    it0.setData(Qt.UserRole, dict(rr))
+                except Exception:
+                    pass
+
+                self.tbl_disp.setItem(i, 0, it0)
+                self.tbl_disp.setItem(i, 1, it1)
+                self.tbl_disp.setItem(i, 2, it2)
+                self.tbl_disp.setItem(i, 3, it3)
+                self.tbl_disp.setItem(i, 4, it4)
+                self.tbl_disp.setItem(i, 5, it5)
+
+        finally:
+            try:
+                self.tbl_disp.setUpdatesEnabled(True)
+                self.tbl_disp.setSortingEnabled(True)
+            except Exception:
+                pass
+
+        # restore selection
+        if did_before is not None:
+            try:
+                for r in range(self.tbl_disp.rowCount()):
+                    it = self.tbl_disp.item(r, 0)
+                    if it and _safe_int(it.text(), -1) == int(did_before):
+                        self.tbl_disp.setCurrentCell(r, 0)
+                        break
+            except Exception:
+                pass
+
+        # select first row if none
+        try:
+            if self.tbl_disp.rowCount() > 0 and _current_row_any(self.tbl_disp) < 0:
+                self.tbl_disp.setCurrentCell(0, 0)
+        except Exception:
+            pass
+
+        self._disp_selected = self._selected_disposal_case()
+        self._fill_disposal_detail(self._disp_selected)
+        self._sync_disposal_buttons()
+
+    # -------------------- disposal menu (header button) --------------------
 
     def _open_disposal_menu(self) -> None:
         m = QMenu(self)
@@ -1862,24 +2415,33 @@ class AssetDetailDialog(QDialog):
         elif act == a_legacy_scrap:
             self._legacy_scrap()
 
-# (FILENAME: ui/asset_detail_dialog.py - END PART 3/4)
+# (FILENAME: ui/asset_detail_dialog.py - END PART 4/4A)
 
 # FILENAME: ui/asset_detail_dialog.py
-# (FILENAME: ui/asset_detail_dialog.py - START PART 4/4)
+# (FILENAME: ui/asset_detail_dialog.py - START PART 4/4B)
 
-    # -------------------- disposal actions --------------------
+    # -------------------- disposal actions (service-first) --------------------
 
-    def _ui_prepare_disposal(self) -> None:
+    def _ui_prepare_disposal(self, reason: Optional[str] = None, notes: Optional[str] = None) -> None:
         if not _can_disposal_prepare():
             QMessageBox.warning(self, "RBAC", "Nemaš pravo: disposal.prepare")
             return
 
-        reason, ok = QInputDialog.getText(self, "Priprema za rashod", "Razlog (kratko):")
-        if not ok:
+        if reason is None:
+            reason2, ok = QInputDialog.getText(self, "Priprema za rashod", "Razlog (kratko):")
+            if not ok:
+                return
+            reason = (reason2 or "").strip()
+
+        if not (reason or "").strip():
+            QMessageBox.warning(self, "Greška", "Razlog je obavezan.")
             return
-        notes, ok2 = QInputDialog.getMultiLineText(self, "Priprema za rashod", "Napomena (opciono):", "")
-        if not ok2:
-            return
+
+        if notes is None:
+            notes2, ok2 = QInputDialog.getMultiLineText(self, "Priprema za rashod", "Napomena (opciono):", "")
+            if not ok2:
+                return
+            notes = (notes2 or "").strip()
 
         try:
             if svc_prepare_disposal is None:
@@ -1922,7 +2484,7 @@ class AssetDetailDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Greška", f"Ne mogu da odobrim.\n\n{e}")
 
-    def _ui_cancel_disposal(self, case: Optional[Dict[str, Any]]) -> None:
+    def _ui_cancel_disposal(self, case: Optional[Dict[str, Any]], reason: Optional[str] = None) -> None:
         if not case:
             QMessageBox.information(self, "Info", "Nema otvorenog slučaja.")
             return
@@ -1935,9 +2497,11 @@ class AssetDetailDialog(QDialog):
             QMessageBox.warning(self, "Greška", "Neispravan disposal_id.")
             return
 
-        why, ok = QInputDialog.getText(self, "Otkaži pripremu", "Razlog otkaza (opciono):")
-        if not ok:
-            return
+        if reason is None:
+            why, ok = QInputDialog.getText(self, "Otkaži pripremu", "Razlog otkaza (opciono):")
+            if not ok:
+                return
+            reason = (why or "").strip()
 
         reply = QMessageBox.question(self, "Potvrda", f"Otkazati pripremu? (case #{did})", QMessageBox.Yes | QMessageBox.No)
         if reply != QMessageBox.Yes:
@@ -1946,13 +2510,13 @@ class AssetDetailDialog(QDialog):
         try:
             if svc_cancel_disposal is None:
                 raise RuntimeError("cancel_disposal nije dostupan (services/assets_service.py).")
-            svc_cancel_disposal(disposal_id=did, reason=(why or "").strip(), source="ui_asset_detail.cancel_disposal")  # type: ignore[misc]
+            svc_cancel_disposal(disposal_id=did, reason=(reason or "").strip(), source="ui_asset_detail.cancel_disposal")  # type: ignore[misc]
             QMessageBox.information(self, "OK", "Priprema otkazana (CANCELLED).")
             self._reload_all()
         except Exception as e:
             QMessageBox.critical(self, "Greška", f"Ne mogu da otkažem.\n\n{e}")
 
-    def _ui_dispose_from_case(self, case: Optional[Dict[str, Any]]) -> None:
+    def _ui_dispose_from_case(self, case: Optional[Dict[str, Any]], doc_no: Optional[str] = None) -> None:
         if not case:
             QMessageBox.information(self, "Info", "Nema otvorenog slučaja.")
             return
@@ -1965,9 +2529,11 @@ class AssetDetailDialog(QDialog):
             QMessageBox.warning(self, "Greška", "Neispravan disposal_id.")
             return
 
-        doc_no, ok = QInputDialog.getText(self, "Final rashod", "Broj dokumenta (opciono):")
-        if not ok:
-            return
+        if doc_no is None:
+            doc_no2, ok = QInputDialog.getText(self, "Final rashod", "Broj dokumenta (opciono):")
+            if not ok:
+                return
+            doc_no = (doc_no2 or "").strip()
 
         reply = QMessageBox.question(
             self,
@@ -1990,6 +2556,29 @@ class AssetDetailDialog(QDialog):
             self._reload_all()
         except Exception as e:
             QMessageBox.critical(self, "Greška", f"Ne mogu da rashodujem.\n\n{e}")
+
+    # --- disposal tab actions (use tab inputs) ---
+
+    def _ui_prepare_disposal_from_tab(self) -> None:
+        reason = (self.ed_disp_reason.text() or "").strip()
+        notes = (self.ed_disp_notes.toPlainText() or "").strip()
+        self._ui_prepare_disposal(reason=reason, notes=notes)
+
+    def _ui_approve_disposal_from_tab(self) -> None:
+        case = self._get_open_disposal_case_db()
+        self._ui_approve_disposal(case)
+
+    def _ui_cancel_disposal_from_tab(self) -> None:
+        case = self._get_open_disposal_case_db()
+        reason = (self.ed_disp_notes.toPlainText() or "").strip()
+        self._ui_cancel_disposal(case, reason=reason)
+
+    def _ui_dispose_from_case_from_tab(self) -> None:
+        case = self._get_open_disposal_case_db()
+        doc_no = (self.ed_disp_doc.text() or "").strip()
+        self._ui_dispose_from_case(case, doc_no=doc_no)
+
+    # -------------------- legacy scrap/restore --------------------
 
     def _legacy_scrap(self) -> None:
         if not (_can_asset_edit() and _can_disposal_dispose()):
@@ -3338,4 +3927,4 @@ class AssetDetailDialog(QDialog):
             pass
         super().keyPressEvent(event)
 
-# (FILENAME: ui/asset_detail_dialog.py - END PART 4/4)
+# (FILENAME: ui/asset_detail_dialog.py - END PART 4/4B)

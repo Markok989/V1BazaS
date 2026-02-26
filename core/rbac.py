@@ -28,12 +28,12 @@ from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 # ---------------------------------------------------------------------------
 
 # assets
-PERM_ASSETS_VIEW = "assets.view"                   # FULL list
+PERM_ASSETS_VIEW = "assets.view"  # FULL list
 PERM_ASSETS_CREATE = "assets.create"
 PERM_ASSETS_EDIT = "assets.edit"
 PERM_ASSETS_DELETE = "assets.delete"
-PERM_ASSETS_METRO_VIEW = "assets.metrology.view"   # metrology scope list
-PERM_ASSETS_MY_VIEW = "assets.my.view"             # MY assets list (duženja)
+PERM_ASSETS_METRO_VIEW = "assets.metrology.view"  # metrology scope list
+PERM_ASSETS_MY_VIEW = "assets.my.view"  # MY assets list (duženja)
 
 # assignments
 PERM_ASSIGN_VIEW = "assignments.view"
@@ -45,9 +45,9 @@ PERM_ASSIGN_DELETE = "assignments.delete"
 PERM_AUDIT_VIEW = "audit.view"
 
 # metrology
-PERM_METRO_VIEW = "metrology.view"                 # feature access; scope filter radi servis
-PERM_METRO_MY_VIEW = "metrology.my.view"           # eksplicitno: MY metrology view
-PERM_METRO_SCOPE_VIEW = "metrology.scope.view"     # eksplicitno: metrology-scope view
+PERM_METRO_VIEW = "metrology.view"  # feature access; scope filter radi servis
+PERM_METRO_MY_VIEW = "metrology.my.view"  # eksplicitno: MY metrology view
+PERM_METRO_SCOPE_VIEW = "metrology.scope.view"  # eksplicitno: metrology-scope view
 PERM_METRO_EDIT = "metrology.edit"
 PERM_METRO_MANAGE = "metrology.manage"
 
@@ -85,19 +85,16 @@ ROLE_ALIASES: Dict[str, str] = {
     "SUPERADMIN": ROLE_ADMIN,
     "GLOBAL_ADMIN": ROLE_ADMIN,
     "GLOBALADMIN": ROLE_ADMIN,
-
     # sector admin
     "SECTORADMIN": ROLE_SECTOR_ADMIN,
     "ADMIN_SEKTORA": ROLE_SECTOR_ADMIN,
     "SEKTOR_ADMIN": ROLE_SECTOR_ADMIN,
     "SEKTORADMIN": ROLE_SECTOR_ADMIN,
-
     # readonly
     "READ_ONLY": ROLE_READONLY,
     "RO": ROLE_READONLY,
     "VIEW_ONLY": ROLE_READONLY,
     "VIEWONLY": ROLE_READONLY,
-
     # basic
     "BASIC": ROLE_BASIC,
     "USER": ROLE_BASIC,
@@ -105,7 +102,6 @@ ROLE_ALIASES: Dict[str, str] = {
     "KORISNIK": ROLE_BASIC,
     "OBICAN": ROLE_BASIC,
     "OBICAN_KORISNIK": ROLE_BASIC,
-
     # referent metro
     "REFERENT_METROLOGIJE": ROLE_REFERENT_METRO,
     "METRO_REFERENT": ROLE_REFERENT_METRO,
@@ -127,27 +123,21 @@ ROLE_PERMS: Dict[str, Set[str]] = {
         PERM_ASSETS_CREATE,
         PERM_ASSETS_EDIT,
         PERM_ASSETS_MY_VIEW,
-
         PERM_ASSIGN_VIEW,
         PERM_ASSIGN_CREATE,
         PERM_ASSIGN_EDIT,
-
         PERM_AUDIT_VIEW,
-
         PERM_METRO_VIEW,
         PERM_METRO_EDIT,
-
         PERM_DISPOSAL_PREPARE,
         PERM_DISPOSAL_APPROVE,
         PERM_DISPOSAL_DISPOSE,
-
         PERM_SETTINGS_VIEW,
         PERM_SETTINGS_MANAGE,
         PERM_USERS_VIEW,
         PERM_USERS_MANAGE,
         PERM_REPORTS_PRINT,
     },
-
     # BASIC_USER: minimalno (BASIC UI: Moj Dashboard + Moja oprema)
     ROLE_BASIC: {
         PERM_ASSETS_MY_VIEW,
@@ -156,7 +146,6 @@ ROLE_PERMS: Dict[str, Set[str]] = {
         PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
-
     # READONLY: “čitam sve, ne menjam”
     ROLE_READONLY: {
         PERM_ASSETS_VIEW,
@@ -167,57 +156,43 @@ ROLE_PERMS: Dict[str, Set[str]] = {
         PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
-
     ROLE_REFERENT_IT: {
         PERM_ASSETS_VIEW,
         PERM_ASSETS_CREATE,
         PERM_ASSETS_EDIT,
         PERM_ASSETS_MY_VIEW,
-
         PERM_ASSIGN_VIEW,
         PERM_ASSIGN_CREATE,
-
         PERM_AUDIT_VIEW,
         PERM_METRO_VIEW,
-
         PERM_DISPOSAL_PREPARE,
-
         PERM_USERS_VIEW,
         PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
-
     ROLE_REFERENT_OS: {
         PERM_ASSETS_VIEW,
         PERM_ASSETS_CREATE,
         PERM_ASSETS_EDIT,
         PERM_ASSETS_MY_VIEW,
-
         PERM_ASSIGN_VIEW,
         PERM_ASSIGN_CREATE,
-
         PERM_AUDIT_VIEW,
         PERM_METRO_VIEW,
-
         PERM_DISPOSAL_PREPARE,
-
         PERM_USERS_VIEW,
         PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
-
     # REFERENT_METRO: metrology scope + MY
     ROLE_REFERENT_METRO: {
         PERM_ASSETS_METRO_VIEW,
         PERM_ASSETS_MY_VIEW,
-
         PERM_METRO_VIEW,
         PERM_METRO_SCOPE_VIEW,
         PERM_METRO_MY_VIEW,
         PERM_METRO_EDIT,
-
         PERM_DISPOSAL_PREPARE,
-
         PERM_SETTINGS_VIEW,
         PERM_REPORTS_PRINT,
     },
@@ -378,6 +353,12 @@ def _role_sort_key(role: str) -> Tuple[int, str]:
 
 
 def list_assigned_roles(user: Any) -> List[str]:
+    """
+    Izvlači dodeljene role iz user objekta.
+    Pravilo protiv eskalacije:
+      - Ako postoji roles/user_roles/rbac_roles/profiles i NIJE prazno => to je izvor istine.
+      - Tek ako NEMA takvih polja (ili su “prazna”/None) => fallback na 'role'.
+    """
     u = _user_as_dict(user)
 
     v = u.get("roles")
@@ -390,6 +371,7 @@ def list_assigned_roles(user: Any) -> List[str]:
 
     roles = _split_listish_or_string(v)
     if not roles:
+        # legacy fallback (samo ako nema validnih listi)
         roles = _split_listish_or_string(u.get("role"))
 
     seen: Set[str] = set()
@@ -409,7 +391,6 @@ def list_assigned_roles(user: Any) -> List[str]:
 def pick_highest_role(roles: Iterable[Any]) -> str:
     best = ROLE_READONLY
     best_score = int(ROLE_PRIORITY.get(best, 0))
-
     for r in roles or []:
         rr = normalize_role(r)
         if not rr:
@@ -418,21 +399,23 @@ def pick_highest_role(roles: Iterable[Any]) -> str:
         if (score > best_score) or (score == best_score and rr < best):
             best = rr
             best_score = score
-
     return best or ROLE_READONLY
 
 
 def _role_from_user(user: Any) -> str:
     u = _user_as_dict(user)
+
     assigned = list_assigned_roles(u)
     assigned_set = set(assigned)
 
+    # active_role mora biti u assigned
     ar = _first_nonempty(u, ("active_role", "active_profile"))
     if ar:
         nar = normalize_role(ar)
         if nar in assigned_set:
             return nar
 
+    # fallback na 'role' samo ako je u assigned (sprečava eskalaciju kad roles postoji)
     r = _first_nonempty(u, ("role", "user_role", "rbac_role", "profile"))
     if r:
         parts = _split_listish_or_string(r)
@@ -468,6 +451,7 @@ def _perms_for_role(role: str) -> FrozenSet[str]:
 
 
 def _apply_security_guards_to_role_perms() -> None:
+    # BASIC/READONLY: nikad wildcard i nikad users.*
     for rr in (ROLE_BASIC, ROLE_READONLY):
         rp = ROLE_PERMS.get(rr)
         if not rp:
@@ -501,20 +485,19 @@ def user_has_perm(user: Any, perm: str) -> bool:
 
     role = _role_from_user(user)
 
+    # hard deny for BASIC/READONLY
     if role in _FAILSAFE_DENY_ROLES and _is_users_perm(p):
         return False
 
     for g in _perms_for_role(role):
         gg = (g or "").strip()
-
         if role in _FAILSAFE_DENY_ROLES and gg == "*":
             continue
-
         if _perm_match(gg, p):
+            # double-guard: users.* never for BASIC/READONLY
             if role in _FAILSAFE_DENY_ROLES and _is_users_perm(p):
                 return False
             return True
-
     return False
 
 
@@ -535,12 +518,10 @@ def user_has_all_perms(user: Any, perms: Optional[Iterable[str]]) -> bool:
     """
     if perms is None:
         return False
-    any_seen = False
     for p in perms:
-        any_seen = True
         if not user_has_perm(user, p):
             return False
-    return True if not any_seen else True
+    return True
 
 
 def require_perm(user: Any, perm: str) -> None:
@@ -566,7 +547,6 @@ def effective_perms(user: Any) -> Set[str]:
 
 # FILENAME: core/rbac.py
 # (FILENAME: core/rbac.py - START PART 2/2)
-
 # ---------------------------------------------------------------------------
 # Compatibility helpers: core.rbac.can (UI fallback)
 # ---------------------------------------------------------------------------
@@ -651,14 +631,11 @@ __all__ = [
     "PERM_ASSETS_DELETE",
     "PERM_ASSETS_METRO_VIEW",
     "PERM_ASSETS_MY_VIEW",
-
     "PERM_ASSIGN_VIEW",
     "PERM_ASSIGN_CREATE",
     "PERM_ASSIGN_EDIT",
     "PERM_ASSIGN_DELETE",
-
     "PERM_AUDIT_VIEW",
-
     "PERM_METRO_VIEW",
     "PERM_METRO_MY_VIEW",
     "PERM_METRO_SCOPE_VIEW",
@@ -666,17 +643,14 @@ __all__ = [
     "PERM_METRO_MANAGE",
     "PERM_METRO_WRITE",
     "PERM_METRO_ADMIN",
-
     "PERM_DISPOSAL_PREPARE",
     "PERM_DISPOSAL_APPROVE",
     "PERM_DISPOSAL_DISPOSE",
-
     "PERM_USERS_VIEW",
     "PERM_USERS_MANAGE",
     "PERM_SETTINGS_VIEW",
     "PERM_SETTINGS_MANAGE",
     "PERM_REPORTS_PRINT",
-
     # roles
     "ROLE_ADMIN",
     "ROLE_SECTOR_ADMIN",
@@ -685,12 +659,10 @@ __all__ = [
     "ROLE_REFERENT_OS",
     "ROLE_BASIC",
     "ROLE_READONLY",
-
     # config
     "ROLE_ALIASES",
     "ROLE_PERMS",
     "ROLE_PRIORITY",
-
     # api
     "normalize_role",
     "pick_highest_role",
@@ -704,7 +676,6 @@ __all__ = [
     "list_assigned_roles",
     "validate_rbac_config",
     "clear_rbac_caches",
-
     # compat helpers
     "can",
     "can_any",
@@ -743,7 +714,7 @@ if __name__ == "__main__":  # pragma: no cover
     u_unknown = {"roles": ["SOMETHING_NEW"]}
     assert effective_role(u_unknown) == ROLE_READONLY
 
-    # prazna roles lista ne blokira fallback na 'role'
+    # prazna roles lista ne blokira fallback na 'role' (legacy kompat)
     u_empty_roles = {"roles": [], "role": "REFERENT_IT"}
     assert effective_role(u_empty_roles) == "REFERENT_IT"
 
@@ -751,7 +722,6 @@ if __name__ == "__main__":  # pragma: no cover
     assert normalize_role(["ADMIN", "BASIC_USER"]) == "ADMIN"
 
     warns = validate_rbac_config()
-    # Ne pada test na warnings, ali možeš da ih ispišeš ako želiš.
     print("core/rbac.py self-test OK")
     if warns:
         print("WARNINGS:")
@@ -759,4 +729,4 @@ if __name__ == "__main__":  # pragma: no cover
             print(" -", w)
 
 # (FILENAME: core/rbac.py - END PART 2/2)
-# FILENAME: core/rbac.py
+# END FILENAME: core/rbac.py

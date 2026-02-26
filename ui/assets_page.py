@@ -5,7 +5,7 @@
 BazaS2 (offline) — ui/assets_page.py
 
 AssetsPage (V1):
-- Tabovi: Aktivna / Bez zaduženja / Rashodovana / Sva
+- Tabovi: Aktivna / Bez zaduženja / Priprema za rashod / Rashodovana / Sva
 - Filteri: DB pretraga (Enter/Pretraži) + lokalni backstop
 - Scope: Sva / Moja oprema / Metrologija (RBAC driven)
 - Preview panel (collapse/expand) + sort persist + splitter persist
@@ -18,19 +18,23 @@ Senior patch (stabilnost/UX):
 - Stabilnost: fail-soft importi, guard-ovi, ne ruši UI ako helper nije tu.
 - NEW (compat): priprema za "scope-aware" service call (ako list_assets podrži scope/actor/sector u potpisu).
 
-Patch (2026-02-26):
+Patch (2026-02-26/27):
 - FIX: fatal crash kada metoda _on_reload_timeout nije vidljiva (indent/copy-paste) — safe-connect fallback na load_assets().
-- UX: dodata kolona "Sektor" u tabeli + u preview panelu (bez promene postojećih indeksa).
-- Compat: bump wire_columns key na v11 da se stari layout ne sudara sa novom kolonom.
+- UX: dodata kolona "Sektor" u tabeli + u preview panelu.
+- UX: dodat tab "Priprema za rashod" (open disposal cases: PREPARED/APPROVED) — scope-safe filter (nema curenja).
+- Compat: bump wire_columns key na v12 (novo: tab + kolone) da se stari layout ne sudara.
+- Persist: čuvamo i tab_text (da restore preživi ubacivanje novog taba).
 """
 
 from __future__ import annotations
 
 import inspect
 import logging
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Set, Iterable
 
 from PySide6.QtCore import (
     Qt,
@@ -105,12 +109,18 @@ try:
         PERM_ASSETS_CREATE,
         PERM_ASSETS_MY_VIEW,
         PERM_ASSETS_METRO_VIEW,
+        PERM_DISPOSAL_PREPARE,
+        PERM_DISPOSAL_APPROVE,
+        PERM_DISPOSAL_DISPOSE,
     )
 except Exception:
     PERM_ASSETS_VIEW = "assets.view"
     PERM_ASSETS_CREATE = "assets.create"
     PERM_ASSETS_MY_VIEW = "assets.my.view"
     PERM_ASSETS_METRO_VIEW = "assets.metrology.view"
+    PERM_DISPOSAL_PREPARE = "disposal.prepare"
+    PERM_DISPOSAL_APPROVE = "disposal.approve"
+    PERM_DISPOSAL_DISPOSE = "disposal.dispose"
 
 # -------------------- services/dialogs (safe import) --------------------
 try:
@@ -137,6 +147,16 @@ def _can(perm: str) -> bool:
         return bool(can(perm))
     except Exception:
         return False
+
+
+def _can_any(perms: Iterable[str]) -> bool:
+    for p in perms:
+        try:
+            if _can(p):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _actor_name() -> str:
@@ -384,6 +404,53 @@ def _try_create_assignment_after_create(asset_uid: str, to_holder: str, to_locat
         )
     except Exception:
         return
+
+
+# -------------------- DB path helpers (disposal tab, scope-safe filtering) --------------------
+def _app_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _resolve_db_path_str() -> Optional[str]:
+    """
+    Best-effort, jedna istina (prefer core.db.get_db_path):
+    - core.db.get_db_path()
+    - core.config.DB_FILE
+    """
+    p: Optional[Path] = None
+    try:
+        from core.db import get_db_path as _get_db_path  # type: ignore
+        raw = _get_db_path()
+        if raw:
+            p = Path(str(raw)).expanduser()
+    except Exception:
+        p = None
+
+    if p is None:
+        try:
+            from core.config import DB_FILE  # type: ignore
+            p = Path(str(DB_FILE)).expanduser()
+        except Exception:
+            p = None
+
+    if p is None:
+        return None
+
+    try:
+        if not p.is_absolute():
+            p = (_app_root() / p).resolve()
+        else:
+            p = p.resolve()
+        return p.as_posix()
+    except Exception:
+        return None
+
+
+def _iter_chunks(items: List[str], chunk_size: int = 800) -> Iterable[List[str]]:
+    if chunk_size <= 0:
+        chunk_size = 800
+    for i in range(0, len(items), chunk_size):
+        yield items[i:i + chunk_size]
 
 
 # -------------------- Sortable item (numeric-friendly sorting) --------------------
@@ -784,6 +851,7 @@ class AssetsPage(QWidget):
 
     TAB_ACTIVE = "Aktivna"
     TAB_UNASSIGNED = "Bez zaduženja"
+    TAB_DISPOSAL_PREP = "Priprema za rashod"
     TAB_SCRAPPED = "Rashodovana"
     TAB_ALL = "Sva"
 
@@ -793,6 +861,7 @@ class AssetsPage(QWidget):
 
     _SET_GROUP = "ui/assets_page"
     _K_TAB = "tab_index"
+    _K_TAB_TEXT = "tab_text"  # ✅ new: resilient restore
     _K_SCOPE = "scope_text"
     _K_CAT = "category"
     _K_STATUS = "status"
@@ -813,13 +882,14 @@ class AssetsPage(QWidget):
         self.logger = logger or logging.getLogger(__name__)
 
         # wire_columns storage key (bitno za reset kolona)
-        self._cols_key = "assets_table_v11"
+        self._cols_key = "assets_table_v12"
 
         # RBAC flags
         self._has_any_view = False
         self._has_full_view = False
         self._has_my_view = False
         self._has_metro_view = False
+        self._has_disposal_access = _can_any((PERM_DISPOSAL_PREPARE, PERM_DISPOSAL_APPROVE, PERM_DISPOSAL_DISPOSE))
 
         # state
         self._loading = False
@@ -896,6 +966,7 @@ class AssetsPage(QWidget):
         self.tabs = QTabWidget()
         self.tabs.addTab(QWidget(), self.TAB_ACTIVE)
         self.tabs.addTab(QWidget(), self.TAB_UNASSIGNED)
+        self.tabs.addTab(QWidget(), self.TAB_DISPOSAL_PREP)
         self.tabs.addTab(QWidget(), self.TAB_SCRAPPED)
         self.tabs.addTab(QWidget(), self.TAB_ALL)
 
@@ -1134,7 +1205,6 @@ class AssetsPage(QWidget):
             self.request_reload()
 
 # (FILENAME: ui/assets_page.py - END PART 1/3)
-# FILENAME: ui/assets_page.py
 
 # FILENAME: ui/assets_page.py
 # (FILENAME: ui/assets_page.py - START PART 2/3)
@@ -1260,6 +1330,10 @@ class AssetsPage(QWidget):
             s.beginGroup(self._SET_GROUP)
             try:
                 s.setValue(self._K_TAB, int(self.tabs.currentIndex()))
+                try:
+                    s.setValue(self._K_TAB_TEXT, str(self.tabs.tabText(self.tabs.currentIndex()) or ""))
+                except Exception:
+                    s.setValue(self._K_TAB_TEXT, "")
                 s.setValue(self._K_SCOPE, str(self.cb_scope.currentText() or ""))
                 s.setValue(self._K_CAT, str(self.cb_category.currentText() or "SVE"))
                 s.setValue(self._K_STATUS, str(self.cb_status.currentText() or "SVE"))
@@ -1307,6 +1381,7 @@ class AssetsPage(QWidget):
             s.beginGroup(self._SET_GROUP)
             try:
                 tab_idx = s.value(self._K_TAB, 0)
+                tab_txt = str(s.value(self._K_TAB_TEXT, "") or "")
                 scope_txt = str(s.value(self._K_SCOPE, "") or "")
                 cat_txt = str(s.value(self._K_CAT, "SVE") or "SVE")
                 st_txt = str(s.value(self._K_STATUS, "SVE") or "SVE")
@@ -1333,6 +1408,16 @@ class AssetsPage(QWidget):
                 return int(default)
 
         tab_idx_i = max(0, min(_to_int(tab_idx, 0), self.tabs.count() - 1))
+        # ✅ prefer restore by text (stable across inserted tabs)
+        if tab_txt:
+            try:
+                for i in range(self.tabs.count()):
+                    if str(self.tabs.tabText(i) or "") == tab_txt:
+                        tab_idx_i = i
+                        break
+            except Exception:
+                pass
+
         prev_w_i = max(self.preview.collapsed_width(), _to_int(prev_w, self.preview.expanded_width_hint()))
         sort_col_i = _to_int(sort_col, -1)
         sort_order_i = _to_int(sort_order, int(Qt.AscendingOrder))
@@ -1444,6 +1529,18 @@ class AssetsPage(QWidget):
         self._has_metro_view = _can(PERM_ASSETS_METRO_VIEW)
         self._has_any_view = self._has_full_view or self._has_my_view or self._has_metro_view
 
+        # disposal tab: disable if no access (feature visibility)
+        try:
+            idx = self._tab_index_by_text(self.TAB_DISPOSAL_PREP)
+            if idx >= 0:
+                self.tabs.setTabEnabled(idx, bool(self._has_disposal_access and self._has_any_view))
+                self.tabs.setTabToolTip(
+                    idx,
+                    "" if (self._has_disposal_access and self._has_any_view) else "Nemaš pravo za rad sa rashodom (disposal.*)."
+                )
+        except Exception:
+            pass
+
         try:
             self.cb_scope.blockSignals(True)
             self.cb_scope.clear()
@@ -1482,6 +1579,15 @@ class AssetsPage(QWidget):
         ok_create = _can(PERM_ASSETS_CREATE)
         self.btn_new.setEnabled(bool(ok_create))
         self.btn_new.setToolTip("" if ok_create else "Novo sredstvo traži: assets.create.")
+
+    def _tab_index_by_text(self, txt: str) -> int:
+        try:
+            for i in range(self.tabs.count()):
+                if str(self.tabs.tabText(i) or "") == str(txt or ""):
+                    return i
+        except Exception:
+            pass
+        return -1
 
     # -------------------- search typing --------------------
     def _on_search_typing(self, _t: str) -> None:
@@ -1636,6 +1742,11 @@ class AssetsPage(QWidget):
             self.preview.clear()
         self._sync_buttons()
 
+# (FILENAME: ui/assets_page.py - END PART 2/3)
+
+# FILENAME: ui/assets_page.py
+# (FILENAME: ui/assets_page.py - START PART 3/3)
+
     # -------------------- cell styles --------------------
     def _apply_status_cell_style(self, item: QTableWidgetItem, status_raw: Any) -> None:
         try:
@@ -1664,6 +1775,66 @@ class AssetsPage(QWidget):
         except Exception:
             pass
 
+    # -------------------- disposal helpers (scope-safe) --------------------
+    def _open_disposal_uids_for_candidates(self, candidate_uids: List[str]) -> Set[str]:
+        """
+        Vraća asset_uid koji imaju otvoren disposal case (PREPARED/APPROVED),
+        ali *samo* za candidate_uids (scope-safe: ne “vadi” ostale uid-ove).
+        """
+        out: Set[str] = set()
+        if not candidate_uids:
+            return out
+
+        db_path = _resolve_db_path_str()
+        if not db_path:
+            return out
+
+        p = Path(db_path)
+        if not p.exists():
+            return out
+
+        try:
+            conn = sqlite3.connect(db_path)
+        except Exception:
+            return out
+
+        try:
+            conn.row_factory = sqlite3.Row
+            try:
+                t = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='disposal_cases' LIMIT 1;"
+                ).fetchone()
+                if not t:
+                    return out
+            except Exception:
+                return out
+
+            # chunked IN (...) to avoid sqlite variable limit
+            for chunk in _iter_chunks([u for u in candidate_uids if u], chunk_size=800):
+                qmarks = ",".join(["?"] * len(chunk))
+                sql = (
+                    "SELECT DISTINCT asset_uid FROM disposal_cases "
+                    "WHERE status IN ('PREPARED','APPROVED') AND asset_uid IN (" + qmarks + ");"
+                )
+                try:
+                    rows = conn.execute(sql, tuple(chunk)).fetchall()
+                except Exception:
+                    continue
+                for r in rows:
+                    try:
+                        uid = str(r["asset_uid"] if isinstance(r, sqlite3.Row) else r[0]).strip()
+                    except Exception:
+                        uid = ""
+                    if uid:
+                        out.add(uid)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        return out
+
     # -------------------- tab filter --------------------
     def _active_tab_name(self) -> str:
         try:
@@ -1673,12 +1844,25 @@ class AssetsPage(QWidget):
 
     def _apply_tab_filter(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         tab = self._active_tab_name()
+
         if tab == self.TAB_ACTIVE:
             return [r for r in rows if not _is_scrapped(r)]
+
         if tab == self.TAB_UNASSIGNED:
             return [r for r in rows if (not _is_scrapped(r)) and _is_unassigned(r)]
+
         if tab == self.TAB_SCRAPPED:
             return [r for r in rows if _is_scrapped(r)]
+
+        if tab == self.TAB_DISPOSAL_PREP:
+            # tab is UI feature; if user has no access, show empty safely
+            if not (self._has_any_view and self._has_disposal_access):
+                return []
+            uids = [str((r or {}).get("asset_uid") or "").strip() for r in rows if isinstance(r, dict)]
+            uids = [u for u in uids if u]
+            open_uids = self._open_disposal_uids_for_candidates(uids)
+            return [r for r in rows if str((r or {}).get("asset_uid") or "").strip() in open_uids]
+
         return rows
 
     def _scope_name(self) -> str:
@@ -2068,10 +2252,7 @@ class AssetsPage(QWidget):
 
     # -------------------- reload debounce --------------------
     def _on_reload_timeout(self) -> None:
-        """
-        Centralni handler za timer timeout.
-        Postoji zbog starijih app.py connect-a i radi kao stabilna "jedna istina".
-        """
+        """Centralni handler za timer timeout."""
         try:
             self.load_assets()
         except Exception:
@@ -2092,12 +2273,8 @@ class AssetsPage(QWidget):
         except Exception:
             self._on_reload_timeout()
 
-    # -------------------- columns reset (NEW) --------------------
+    # -------------------- columns reset --------------------
     def _clear_wire_columns_state(self) -> None:
-        """
-        Best-effort uklanjanje wire_columns persisted state-a za ovaj table key.
-        Ne pretpostavljamo strukturu helpera — brišemo sve QSettings ključeve koji sadrže self._cols_key.
-        """
         key = _norm(getattr(self, "_cols_key", ""))
         if not key:
             return
@@ -2134,12 +2311,6 @@ class AssetsPage(QWidget):
             return
 
     def _reset_columns_runtime_default(self) -> None:
-        """
-        Runtime reset kolona:
-        - show all
-        - restore default header order (snapshot) ili fallback na logički redosled
-        - default širine iz ColSpec / snapshot
-        """
         try:
             for i in range(self.table.columnCount()):
                 self.table.setColumnHidden(i, False)
@@ -2184,9 +2355,6 @@ class AssetsPage(QWidget):
             pass
 
     def reset_columns_to_default(self) -> None:
-        """
-        Public action: resetuje SAMO kolone (i njihovu persistenciju).
-        """
         try:
             if QMessageBox.question(self, "Potvrda", "Resetovati kolone na podrazumevano?") != QMessageBox.Yes:
                 return
@@ -2197,17 +2365,8 @@ class AssetsPage(QWidget):
         self._reset_columns_runtime_default()
         self._state_dirty()
 
-# (FILENAME: ui/assets_page.py - END PART 2/3)
-
-# FILENAME: ui/assets_page.py
-# (FILENAME: ui/assets_page.py - START PART 3/3)
-
     # -------------------- data load --------------------
     def _list_assets_supported_params(self) -> set:
-        """
-        Kešira imena parametara koje list_assets prihvata.
-        Time izbegavamo TypeError kad servis ne podržava nove parametre (scope/actor/sector...).
-        """
         if self._list_assets_param_names is not None:
             return self._list_assets_param_names
         names: set = set()
@@ -2215,7 +2374,6 @@ class AssetsPage(QWidget):
             if callable(list_assets):
                 sig = inspect.signature(list_assets)
                 for p in sig.parameters.values():
-                    # *args/**kwargs -> tretiramo kao "podržava sve"
                     if p.kind in (p.VAR_KEYWORD, p.VAR_POSITIONAL):
                         names.add("__any__")
                     else:
@@ -2226,11 +2384,6 @@ class AssetsPage(QWidget):
         return names
 
     def _call_list_assets(self, **kwargs) -> List[Any]:
-        """
-        Poziva list_assets fail-soft:
-        - ako servis ima **kwargs ili param, prosledi ga
-        - ako nema, izbaci ga iz kwargs (nema TypeError)
-        """
         if not callable(list_assets):
             raise RuntimeError("Servis list_assets nije dostupan.")
 
@@ -2311,7 +2464,7 @@ class AssetsPage(QWidget):
                 sector_id=sector_id,
             ) or []
 
-            # hard-cap banner
+            # banner
             try:
                 if isinstance(rows_any, list) and len(rows_any) >= limit:
                     self.lb_info.setText(f"Prikazano je prvih {limit} rezultata. Suzi filtere za precizniji prikaz.")
@@ -2340,6 +2493,18 @@ class AssetsPage(QWidget):
 
             try:
                 self.lb_empty.setVisible(len(rows) == 0)
+            except Exception:
+                pass
+
+            # extra info for disposal tab
+            try:
+                if self._active_tab_name() == self.TAB_DISPOSAL_PREP:
+                    if not (self._has_disposal_access and self.tabs.isTabEnabled(self._tab_index_by_text(self.TAB_DISPOSAL_PREP))):
+                        self.lb_info.setText("Nemaš pravo za tab 'Priprema za rashod' (disposal.*).")
+                        self.lb_info.show()
+                    else:
+                        self.lb_info.setText(f"Priprema za rashod — sredstava: {len(rows)}")
+                        self.lb_info.show()
             except Exception:
                 pass
 
@@ -2412,12 +2577,7 @@ class AssetsPage(QWidget):
                     it_loc.setFlags(it_loc.flags() & ~Qt.ItemIsEditable)
                     self.table.setItem(i, self.COL_IDX_LOC, it_loc)
 
-                    # ✅ NOVO: sektor kolona (ako je Part 1 patch primenjen)
-                    sec = _get_sector(r)  # helper je u Part 1 patch-u
-                    it_sec = QTableWidgetItem(_norm(sec))
-                    it_sec.setFlags(it_sec.flags() & ~Qt.ItemIsEditable)
-                    self.table.setItem(i, self.COL_IDX_SECTOR, it_sec)
-
+                    # Updated (pre Sektora, da prati header)
                     raw_upd = r.get("updated_at", "") or ""
                     disp_upd = fmt_dt_sr(raw_upd)
                     it_upd = SortableItem(str(disp_upd), _safe_dt_sort_value(raw_upd))
@@ -2425,6 +2585,14 @@ class AssetsPage(QWidget):
                     if raw_upd:
                         it_upd.setToolTip(_norm(raw_upd))
                     self.table.setItem(i, self.COL_IDX_UPD, it_upd)
+
+                    # Sektor
+                    sec = _get_sector(r)
+                    it_sec = QTableWidgetItem(_norm(sec))
+                    it_sec.setFlags(it_sec.flags() & ~Qt.ItemIsEditable)
+                    if sec:
+                        it_sec.setToolTip(str(sec))
+                    self.table.setItem(i, self.COL_IDX_SECTOR, it_sec)
 
             finally:
                 self.table.blockSignals(False)
@@ -2608,7 +2776,7 @@ class AssetsPage(QWidget):
         - preview state
         - splitter/header state (factory snapshot)
         - čisti QSettings group ui/assets_page
-        - čisti wire_columns state za assets_table_v10 (ako postoji)
+        - čisti wire_columns state za assets_table_v12 (ako postoji)
         """
         try:
             if QMessageBox.question(self, "Potvrda", "Resetovati layout i filtere na podrazumevano?") != QMessageBox.Yes:

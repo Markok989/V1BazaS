@@ -1212,3 +1212,14 @@ AttributeError: 'AssetsPage' object has no attribute '_on_reload_timeout'
 2026-02-26 00:19:42 | ERROR | BazaS2 | run=2a0f69f0dd | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
 2026-02-26 00:20:22 | ERROR | BazaS2 | run=2a0f69f0dd | user=Bojkovski Jelena | role=SECTOR_ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
 2026-02-26 00:20:47 | ERROR | BazaS2 | run=2a0f69f0dd | user=Atanacković Aleksandar | role=SECTOR_ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-26 00:23:14 | ERROR | BazaS2 | run=ed3f14660e | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-26 00:23:49 | ERROR | BazaS2 | run=076f61da92 | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-26 01:08:26 | ERROR | BazaS2 | run=f55f422b0b | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-26 01:14:56 | ERROR | BazaS2 | run=0e87130874 | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
+2026-02-26 01:51:19 | CRITICAL | BazaS2 | run=0e87130874 | user=Kresojević Marko | role=ADMIN | UNHANDLED EXCEPTION (sys.excepthook)
+Traceback (most recent call last):
+  File "D:\DEV\AppToc\V1Baza\app.py", line 786, in eventFilter
+    def eventFilter(self, obj, ev):  # type: ignore[override]
+    
+KeyboardInterrupt
+2026-02-26 01:51:44 | ERROR | BazaS2 | run=42fd5b102c | user=Kresojević Marko | role=ADMIN | MyDashboard refresh partial issues: My Met alarms: ambiguous column name: updated_at
